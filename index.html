@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Yankee Steam Digital Twin</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <div class="brand-title">Yankee Dryer Steam System</div>
+            <div class="brand-sub">Pulp &amp; Paper Mill&nbsp;&nbsp;|&nbsp;&nbsp;Digital Twin &amp; Predictive Monitoring</div>
+          </div>
+        </div>
+        <nav class="tabs" role="tablist">
+          <button class="tab is-active" data-view="twin" role="tab" aria-selected="true">Twin</button>
+          <button class="tab" data-view="dashboard" role="tab" aria-selected="false">Dashboard</button>
+        </nav>
+        <div class="topbar-right">
+          <span class="online"><span class="dot"></span>System Online</span>
+          <span class="clock"><b id="clock-date"></b><small id="clock-time"></small></span>
+          <button class="settings-btn" type="button" title="Settings">Settings</button>
+        </div>
+      </header>
+
+      <div id="views">
+        <section id="twin-view" data-view="twin">
+          <div id="viewport"></div>
+
+          <header id="header" class="panel" hidden>
+            <h1>Yankee Dryer Steam System — Digital Twin</h1>
+            <p>Phase 1 · 3D model &amp; animation · simulated values</p>
+          </header>
+
+          <aside id="controls" class="panel"></aside>
+          <div id="right-column">
+            <aside id="status" class="panel"></aside>
+            <aside id="info" class="panel" hidden></aside>
+          </div>
+        </section>
+
+        <section id="dashboard-view" data-view="dashboard" hidden></section>
+      </div>
+
+      <div id="loading">
+        <div>Loading Yankee_Steam_DigitalTwin.glb…</div>
+        <div class="bar"><i id="loading-bar"></i></div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
