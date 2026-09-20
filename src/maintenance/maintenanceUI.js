@@ -2,9 +2,9 @@ import { simulationState as S, subscribe, setComponentAnomaly, setVPortActual } 
 import { fmt, THRESHOLDS, levelOfStatus, flowDeviationPercent } from '../simulation/units.js';
 import { ANOMALY_LABELS } from '../simulation/anomalyEngine.js';
 import { knowledgeFor } from './knowledge.js';
-import { createPositionChart, createBallResponseChart, createFlowChart, CHART_COLORS } from '../dashboard/anomalyCharts.js';
-import { chartKind } from '../dashboard/anomalyAnalytics.js';
-import { ballSamplesWallClock } from '../dashboard/liveHistory.js';
+import { createPositionChart, createBallResponseChart, createFlowChart, createSeriesChart, CHART_COLORS } from '../dashboard/anomalyCharts.js';
+import { chartKind, seriesChartFor } from '../dashboard/anomalyAnalytics.js';
+import { ballSamplesWallClock, esdSamplesWallClock, processSamplesWallClock } from '../dashboard/liveHistory.js';
 import * as store from './ticketStore.js';
 
 /**
@@ -70,9 +70,9 @@ export function createMaintenanceUI({ onOpenComponent }) {
   function analyticsHtml(componentId, detectedAt) {
     const rows = store.historicalComparison(componentId);
     return `<div class="mt-section"><h4>Current Values</h4><div class="mt-kv" data-live-values>${liveKv(componentId)}</div></div>
-      <div class="mt-section"><div class="mt-range"><h4 style="margin:0">${chartKind(componentId) === 'position' ? 'Command vs Actual Position' : chartKind(componentId) === 'ballResponse' ? 'Ball Valve Open/Close Response' : 'Steam Flow vs Expected'}</h4>
-        ${chartKind(componentId) === 'ballResponse' ? '<span class="mt-note">last stroke · 200 ms samples</span>' : `<select data-range><option value="60m" ${view.range === '60m' ? 'selected' : ''}>Last 60 Minutes (live)</option><option value="24h" ${view.range === '24h' ? 'selected' : ''}>Last 24 Hours</option><option value="7d" ${view.range === '7d' ? 'selected' : ''}>Last 7 Days</option></select>`}</div>
-        <div class="mt-legend">${chartKind(componentId) === 'position' ? `<span><i style="background:${CHART_COLORS.cmd}"></i>Commanded (%)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual (%)</span>` : chartKind(componentId) === 'ballResponse' ? `<span><i style="background:${CHART_COLORS.cmd}"></i>Command</span><span><i style="background:${CHART_COLORS.act}"></i>Actual state</span>` : `<span><i style="background:${CHART_COLORS.flow}"></i>Steam flow (kg/h)</span><span><i style="background:${CHART_COLORS.expected}"></i>Expected</span>`}</div>
+      <div class="mt-section"><div class="mt-range"><h4 style="margin:0">${chartKind(componentId) === 'position' ? 'Command vs Actual Position' : chartKind(componentId) === 'ballResponse' ? 'Ball Valve Open/Close Response' : chartKind(componentId) === 'esdResponse' ? 'ESD Trip Response' : chartKind(componentId) === 'series' ? (seriesChartFor(componentId)?.title || 'Trend') : 'Steam Flow vs Expected'}</h4>
+        ${chartKind(componentId) === 'ballResponse' || chartKind(componentId) === 'esdResponse' ? '<span class="mt-note">last stroke · live samples</span>' : chartKind(componentId) === 'series' ? '<span class="mt-note">last 10 min</span>' : `<select data-range><option value="60m" ${view.range === '60m' ? 'selected' : ''}>Last 60 Minutes (live)</option><option value="24h" ${view.range === '24h' ? 'selected' : ''}>Last 24 Hours</option><option value="7d" ${view.range === '7d' ? 'selected' : ''}>Last 7 Days</option></select>`}</div>
+        <div class="mt-legend">${chartKind(componentId) === 'position' ? `<span><i style="background:${CHART_COLORS.cmd}"></i>Commanded (%)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual (%)</span>` : chartKind(componentId) === 'ballResponse' || chartKind(componentId) === 'esdResponse' ? `<span><i style="background:${CHART_COLORS.cmd}"></i>Command</span><span><i style="background:${CHART_COLORS.act}"></i>Actual state</span>` : chartKind(componentId) === 'series' ? (seriesChartFor(componentId)?.legend || []).map(([l, color]) => `<span><i style="background:${color}"></i>${esc(l)}</span>`).join('') : `<span><i style="background:${CHART_COLORS.flow}"></i>Steam flow (kg/h)</span><span><i style="background:${CHART_COLORS.expected}"></i>Expected</span>`}</div>
         <div data-chart></div>
         <p class="mt-note">${chartKind(componentId) === 'ballResponse' || view.range === '60m' ? 'Live samples from the Twin.' : 'Simulated historian: healthy baseline before the anomaly onset, live values after.'}</p></div>
       <div class="mt-section"><h4>Historical Comparison</h4><table class="mt-comp-table"><thead><tr><th>Parameter</th><th>Today</th><th>Yesterday</th><th>7-Day Avg</th></tr></thead><tbody data-comp>${rows.map((r) => `<tr><td>${esc(r.label)}</td><td class="today mono">${esc(r.today)}</td><td class="mono">${esc(r.yesterday)}</td><td class="mono">${esc(r.avg7)}</td></tr>`).join('')}</tbody></table><p class="mt-note">Yesterday and 7-day values are a simulated baseline (same units as the Twin).</p></div>`;
@@ -91,7 +91,7 @@ export function createMaintenanceUI({ onOpenComponent }) {
   function mountChart(componentId, detectedAt) {
     const host = bodyEl.querySelector('[data-chart]'); if (!host) return;
     const kind = chartKind(componentId);
-    view.chart = kind === 'position' ? createPositionChart(host) : kind === 'ballResponse' ? createBallResponseChart(host) : createFlowChart(host);
+    view.chart = kind === 'position' ? createPositionChart(host) : kind === 'ballResponse' || kind === 'esdResponse' ? createBallResponseChart(host) : kind === 'series' ? createSeriesChart(host) : createFlowChart(host);
     view.chartKind = kind;
     updateAnalytics(componentId, detectedAt);
   }
@@ -100,6 +100,8 @@ export function createMaintenanceUI({ onOpenComponent }) {
     const comp = bodyEl.querySelector('[data-comp]'); if (comp) setHtml(comp, store.historicalComparison(componentId).map((r) => `<tr><td>${esc(r.label)}</td><td class="today mono">${esc(r.today)}</td><td class="mono">${esc(r.yesterday)}</td><td class="mono">${esc(r.avg7)}</td></tr>`).join(''));
     if (view.chart && bodyEl.querySelector('[data-chart] svg')) {
       if (view.chartKind === 'ballResponse') view.chart.update(ballSamplesWallClock(), { windowMs: 40 * 1000, acceptable: S.ballValve.sim.acceptableTime });
+      else if (view.chartKind === 'esdResponse') view.chart.update(esdSamplesWallClock(), { windowMs: 40 * 1000, acceptable: S.esdValve.sim.acceptableTime });
+      else if (view.chartKind === 'series') { const def = seriesChartFor(componentId, { detectedAt }); if (def) view.chart.update(processSamplesWallClock(), def.spec); }
       else {
         const rangeMs = view.range === '60m' ? 60 * 60 * 1000 : view.range === '24h' ? 24 * 3600 * 1000 : 7 * 24 * 3600 * 1000;
         view.chart.update(store.trendSeries(view.range, detectedAt), { onsetAt: detectedAt, rangeMs });

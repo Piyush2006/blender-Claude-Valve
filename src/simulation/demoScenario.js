@@ -1,6 +1,7 @@
 import { simulationState as S, setAnomalyScenario, setVPortActual, setComponentAnomaly, notify } from './simulationState.js';
 import { presetDetection, tickAnomalies } from './anomalyEngine.js';
-import { seedPositionHistory, seedBallStroke } from '../dashboard/liveHistory.js';
+import { tickSimulation } from './simulationEngine.js';
+import { seedPositionHistory, seedBallStroke, seedProcessHistory } from '../dashboard/liveHistory.js';
 
 /**
  * Boot demo scenario — two technically different anomalies, ALREADY PRESENT when the
@@ -52,6 +53,10 @@ export function loadDemoScenario() {
   const healthy = Math.round(S.steam.maxFlow * DEMO.vPortCommand / 100);
   seedPositionHistory(now - vDetectedAt, { cmd: DEMO.vPortCommand, act: DEMO.vPortCommand, flow: healthy, expected: healthy }, { cmd: DEMO.vPortCommand, act: DEMO.vPortActual, flow: S.steam.flow, expected: S.steam.flow });
   seedBallStroke({ agoS: (now - S.demo.commandedAt) / 1000, closeS: DEMO.ballOperationTime, holdS: DEMO.holdClosedSeconds, openS: DEMO.ballOperationTime });
+  // Let the derived process values (seal / surface temperature, condensate flow, moisture,
+  // separator level…) settle on the demo operating point before the history is backfilled.
+  for (let i = 0; i < 80; i++) tickSimulation(0.1);
+  seedProcessHistory();
   tickAnomalies(0);
   notify();
 }

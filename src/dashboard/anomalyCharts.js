@@ -3,7 +3,10 @@
  *
  *   createPositionChart     — V-Port commanded vs actual position (%), the gap shaded red
  *   createBallResponseChart — Ball valve OPEN/CLOSE command step vs actual state, lag shaded amber
- *   createFlowChart         — steam flow vs expected (generic components)
+ *   createFlowChart         — steam flow vs expected (generic fallback)
+ *   createSeriesChart       — configurable time-series chart (left/right axes, reference lines,
+ *                             shaded bands) used for the ESD, safety valve, trap, check valve,
+ *                             rotary joint and Yankee views
  */
 const NS = 'http://www.w3.org/2000/svg';
 export const CHART_COLORS = { cmd: '#2563EB', act: '#16A34A', flow: '#16A34A', expected: '#94A3B8', gap: 'rgba(220,38,38,0.14)', lag: 'rgba(245,158,11,0.18)' };
@@ -132,6 +135,102 @@ export function createFlowChart(host, { height = 170, unit = 'kg/h' } = {}) {
       c.svg.appendChild(svgEl('circle', { cx: x(last.t), cy: y(last.flow), r: 3.5, fill: CHART_COLORS.flow, stroke: '#fff', 'stroke-width': 1.5 }));
     }
     if (onsetAt && onsetAt >= t0 && onsetAt <= t1) { const xm = x(onsetAt); c.line(xm, T, xm, H - B, 'rgba(220,38,38,0.6)', '3 3'); }
+  }
+  return { update };
+}
+
+/* ------------------------------ generic multi-series chart ------------------------------ */
+/**
+ * spec: {
+ *   rangeMs, left: { unit, min?, max?, fixed? }, right?: { unit, min?, max? },
+ *   series: [{ key, color, width?, dash?, axis?: 'left'|'right', step?: boolean }],
+ *   refLines?: [{ value, color, label?, axis? }],
+ *   shadeBetween?: { a, b, color },                 // band between two left-axis series
+ *   shadeWhere?: { key, above, color, label? },     // vertical bands while series > threshold
+ *   areaBelowZero?: { key, color },                 // fill the negative part of a series
+ *   onsetAt?
+ * }
+ */
+export function createSeriesChart(host, { height = 170 } = {}) {
+  const c = base(host, height);
+  const fmtNum = (v, unit) => (Math.abs(v) >= 1000 ? Math.round(v).toLocaleString('en-US') : Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1)) + (unit ? '' : '');
+  function update(points, spec) {
+    const { W, H, T, B } = c.frame();
+    const L = 46, R = spec.right ? 46 : 12;
+    if (!points || points.length < 2) { c.text(W / 2, H / 2, 'collecting samples…', 'middle'); return; }
+    const rangeMs = spec.rangeMs || 10 * 60 * 1000;
+    const t1 = points[points.length - 1].t, t0 = t1 - rangeMs;
+    const pts = points.filter((p) => p.t >= t0);
+    if (pts.length < 2) { c.text(W / 2, H / 2, 'collecting samples…', 'middle'); return; }
+    const axisRange = (ax, keys, refs) => {
+      if (ax.fixed) return [ax.min, ax.max];
+      let lo = Infinity, hi = -Infinity;
+      for (const p of pts) for (const k of keys) { const v = p[k]; if (Number.isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }
+      for (const r of refs) { lo = Math.min(lo, r); hi = Math.max(hi, r); }
+      if (ax.min != null) lo = Math.min(lo, ax.min); if (ax.max != null) hi = Math.max(hi, ax.max);
+      if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
+      const pad = Math.max((hi - lo) * 0.15, Math.abs(hi) * 0.02, 0.5);
+      return [lo - pad, hi + pad];
+    };
+    const leftKeys = spec.series.filter((s) => (s.axis || 'left') === 'left').map((s) => s.key);
+    const rightKeys = spec.series.filter((s) => s.axis === 'right').map((s) => s.key);
+    const [lLo, lHi] = axisRange(spec.left, leftKeys, (spec.refLines || []).filter((r) => (r.axis || 'left') === 'left').map((r) => r.value));
+    const [rLo, rHi] = spec.right ? axisRange(spec.right, rightKeys, (spec.refLines || []).filter((r) => r.axis === 'right').map((r) => r.value)) : [0, 1];
+    const x = (t) => L + ((t - t0) / Math.max(1, t1 - t0)) * (W - L - R);
+    const yL = (v) => T + (1 - (v - lLo) / Math.max(1e-9, lHi - lLo)) * (H - T - B);
+    const yR = (v) => T + (1 - (v - rLo) / Math.max(1e-9, rHi - rLo)) * (H - T - B);
+    const yFor = (s) => (s.axis === 'right' ? yR : yL);
+    // grid + axes
+    for (let i = 0; i <= 4; i++) {
+      const yy = T + (i / 4) * (H - T - B);
+      c.line(L, yy, W - R, yy, 'rgba(15,23,42,0.08)');
+      c.text(L - 4, yy + 3, fmtNum(lHi - (i / 4) * (lHi - lLo)), 'end');
+      if (spec.right) c.text(W - R + 4, yy + 3, fmtNum(rHi - (i / 4) * (rHi - rLo)), 'start');
+    }
+    c.text(L - 4, H - 7, spec.left.unit, 'end');
+    if (spec.right) c.text(W - R + 4, H - 7, spec.right.unit, 'start');
+    const ft = c.timeFmt(rangeMs);
+    for (let i = 0; i <= 4; i++) { const t = t0 + (i / 4) * (t1 - t0); c.text(x(t), H - 7, ft(t), i === 0 ? 'start' : i === 4 ? 'end' : 'middle'); }
+    // shaded bands while a series is above a threshold (e.g. safety valve open)
+    if (spec.shadeWhere) {
+      const { key, above, color, label } = spec.shadeWhere;
+      let start = null, labelled = false;
+      for (let i = 0; i <= pts.length; i++) {
+        const on = i < pts.length && pts[i][key] > above;
+        if (on && start == null) start = pts[i].t;
+        if (!on && start != null) {
+          const end = i < pts.length ? pts[i].t : t1;
+          c.svg.appendChild(svgEl('rect', { x: x(start), y: T, width: Math.max(1, x(end) - x(start)), height: H - T - B, fill: color }));
+          if (label && !labelled) { c.text(x(start) + 3, T + 9, label, 'start', '#B45309'); labelled = true; }
+          start = null;
+        }
+      }
+    }
+    if (spec.shadeBetween) {
+      const { a, b, color } = spec.shadeBetween;
+      const d = linePath(pts, (p) => x(p.t), (p) => yL(p[a])) + ' ' + [...pts].reverse().map((p) => `L${x(p.t).toFixed(1)},${yL(p[b]).toFixed(1)}`).join(' ') + ' Z';
+      c.path(d, 'none', 0, null, color);
+    }
+    if (spec.areaBelowZero) {
+      const { key, color } = spec.areaBelowZero;
+      const clipped = pts.map((p) => ({ t: p.t, v: Math.min(0, p[key]) }));
+      const d = linePath(clipped, (p) => x(p.t), (p) => yL(p.v)) + ` L${x(t1).toFixed(1)},${yL(0).toFixed(1)} L${x(clipped[0].t).toFixed(1)},${yL(0).toFixed(1)} Z`;
+      c.path(d, 'none', 0, null, color);
+    }
+    for (const r of spec.refLines || []) {
+      const y = (r.axis === 'right' ? yR : yL)(r.value);
+      c.line(L, y, W - R, y, r.color, r.dash || '5 3', 1.2);
+      if (r.label) c.text(L + 4, y - 3, r.label, 'start', r.color);
+    }
+    for (const s of spec.series) {
+      const y = yFor(s);
+      let seq = pts;
+      if (s.step) { seq = []; for (let i = 0; i < pts.length; i++) { const p = pts[i]; if (i && pts[i - 1][s.key] !== p[s.key]) seq.push({ t: p.t, [s.key]: pts[i - 1][s.key] }); seq.push(p); } }
+      c.path(linePath(seq, (p) => x(p.t), (p) => y(p[s.key])), s.color, s.width || 2, s.dash);
+      const last = pts[pts.length - 1];
+      if (!s.dash) c.svg.appendChild(svgEl('circle', { cx: x(last.t), cy: y(last[s.key]), r: 3.5, fill: s.color, stroke: '#fff', 'stroke-width': 1.5 }));
+    }
+    if (spec.onsetAt && spec.onsetAt >= t0 && spec.onsetAt <= t1) { const xm = x(spec.onsetAt); c.line(xm, T, xm, H - B, 'rgba(220,38,38,0.6)', '3 3'); }
   }
   return { update };
 }

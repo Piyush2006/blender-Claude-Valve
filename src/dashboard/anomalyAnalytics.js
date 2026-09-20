@@ -19,7 +19,55 @@ export function targetFlow() {
 export function chartKind(componentId) {
   if (componentId === 'vPortValve') return 'position';
   if (componentId === 'ballValve') return 'ballResponse';
+  if (componentId === 'esdValve') return 'esdResponse';
+  if (['safetyValve', 'steamTrap', 'checkValve', 'rotaryJoint', 'yankee'].includes(componentId)) return 'series';
   return 'flow';
+}
+
+export const SERIES_COLORS = { a: '#2563EB', b: '#DC2626', c: '#16A34A', d: '#7C3AED', ref: '#94A3B8' };
+
+/**
+ * Component-specific series chart definitions (title, legend, spec for createSeriesChart).
+ * Live values only; thresholds are the demo limits used by the detectors.
+ */
+export function seriesChartFor(componentId, entry) {
+  const onsetAt = entry?.detectedAt || null;
+  switch (componentId) {
+    case 'safetyValve': {
+      const set = S.safetyValve.setPressure;
+      return {
+        title: 'Line Pressure vs Set Pressure', note: 'shaded = valve open (relieving)',
+        legend: [['Line pressure (bar)', SERIES_COLORS.a], ['Set pressure', SERIES_COLORS.b, true], ['Valve open', 'rgba(245,158,11,0.25)']],
+        spec: { left: { unit: 'bar', min: set - 3, max: set + 1 }, series: [{ key: 'psvLine', color: SERIES_COLORS.a }], refLines: [{ value: set, color: SERIES_COLORS.b, label: `set ${set.toFixed(1)} bar` }], shadeWhere: { key: 'psvLift', above: 0.5, color: 'rgba(245,158,11,0.18)', label: 'open' }, onsetAt },
+      };
+    }
+    case 'steamTrap':
+      return {
+        title: 'Inlet vs Outlet Temperature', note: 'band = ΔT across the trap (live steam passing when ΔT < 15 °C)',
+        legend: [['Inlet (°C)', SERIES_COLORS.b], ['Outlet (°C)', SERIES_COLORS.a], ['ΔT', 'rgba(37,99,235,0.12)']],
+        spec: { left: { unit: '°C', min: 40, max: 180 }, series: [{ key: 'trapIn', color: SERIES_COLORS.b }, { key: 'trapOut', color: SERIES_COLORS.a }], shadeBetween: { a: 'trapIn', b: 'trapOut', color: 'rgba(37,99,235,0.12)' }, refLines: [{ value: 85, color: SERIES_COLORS.ref, label: 'poor removal < 85 °C' }], onsetAt },
+      };
+    case 'checkValve':
+      return {
+        title: 'Condensate Flow Through Check Valve', note: 'negative = reverse flow (shaded red)',
+        legend: [['Condensate flow (kg/h)', SERIES_COLORS.a], ['Reverse flow', 'rgba(220,38,38,0.2)'], ['ΔP (bar)', SERIES_COLORS.d]],
+        spec: { left: { unit: 'kg/h', min: -1000, max: 1000 }, right: { unit: 'bar', min: -1, max: 1 }, series: [{ key: 'condFlow', color: SERIES_COLORS.a }, { key: 'dP', color: SERIES_COLORS.d, axis: 'right', dash: '4 3', width: 1.5 }], refLines: [{ value: 0, color: SERIES_COLORS.ref, dash: '2 2' }], areaBelowZero: { key: 'condFlow', color: 'rgba(220,38,38,0.2)' }, onsetAt },
+      };
+    case 'rotaryJoint':
+      return {
+        title: 'Rotary Joint Seal Temperature', note: 'steam temperature shown as reference',
+        legend: [['Seal temperature (°C)', SERIES_COLORS.b], ['Steam temperature', SERIES_COLORS.ref, true]],
+        spec: { left: { unit: '°C', min: 100, max: 190 }, series: [{ key: 'sealTemp', color: SERIES_COLORS.b }, { key: 'steamTemp', color: SERIES_COLORS.ref, dash: '5 3', width: 1.5 }], onsetAt },
+      };
+    case 'yankee':
+      return {
+        title: 'Yankee Surface Temperature & Paper Moisture', note: 'moisture on the right axis (target 5.0 %)',
+        legend: [['Surface temperature (°C)', SERIES_COLORS.b], ['Paper moisture (%)', SERIES_COLORS.a], ['Moisture target', SERIES_COLORS.ref, true]],
+        spec: { left: { unit: '°C', min: 50, max: 130 }, right: { unit: '%', min: 3, max: 8 }, series: [{ key: 'yankeeTemp', color: SERIES_COLORS.b }, { key: 'moisture', color: SERIES_COLORS.a, axis: 'right' }], refLines: [{ value: THRESHOLDS.moistureTarget, color: SERIES_COLORS.ref, axis: 'right', label: 'target' }], onsetAt },
+      };
+    default:
+      return null;
+  }
 }
 
 /* ------------------------------ overview metrics ------------------------------ */
