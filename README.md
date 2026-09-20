@@ -186,7 +186,8 @@ panels behave exactly as before; the Anomaly Simulation tab still runs one scena
 32 % actual, CRITICAL) plus a ball valve **stroke test** with a slow actuator — CLOSE command,
 8.5 s to reach CLOSED (expected < 2 s), held closed, then re-opened so steam returns to the
 Yankee; the slow-response verdict stays latched (WARNING) and the dashboard reports the closing
-stroke (CLOSE → CLOSED, 8.5 s). Any operator action on the ball valve or the Anomaly Simulation
+stroke (CLOSE → CLOSED, 8.5 s). A completed 15-cycle ESD response test (~22 min ago) is seeded
+for the ESD analytics panel; the ESD itself is NORMAL at boot. Any operator action on the ball valve or the Anomaly Simulation
 panel takes over from the sequencer.
 
 ## Anomaly Simulation (all components)
@@ -215,6 +216,7 @@ the 2 s persistence timer; catalog severity decides ANOMALY (red) vs WARNING (am
 | Steam trap | Blocked | outlet 45 °C, no discharge, check valve seats | outlet < 60 °C & no flow |
 | Steam trap | Poor Removal | outlet ~75 °C, discharge ×0.5 | 60–85 °C (WARNING) |
 | Check valve | Reverse Flow | reverse ΔP, disc near seat, reverse flow, 3D + schematic arrows flip | flow < 0 |
+| ESD | Cyclic Response Degradation | ON/OFF duty cycle (command flips every 5 s, 10–15 cycles); response dead time grows 0.5 s → 1–2 s → 2–3 s → 4–5 s; steam isolated while CLOSED, ball valve and V-Port untouched | delay > acceptable (1 s) from cycle 4 → WARNING; record kept in `esdValve.cycleTest` for the analytics chart (command vs actual, cycle markers C1…C15, summary, stages NORMAL → SLIGHT DELAY → DEGRADING → SLOW RESPONSE) |
 | Check valve | Failure to Open | forward ΔP, disc stuck seated, no flow | ΔP > 0 & seated |
 | Check valve | Failure to Close | reverse ΔP, disc stuck open, full reverse flow | ΔP < 0 & open |
 

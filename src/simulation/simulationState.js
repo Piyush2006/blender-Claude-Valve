@@ -6,7 +6,8 @@
  */
 /** Default anomaly-simulation parameters per component (RESET restores these). */
 export const DEFAULT_SIMS = {
-  esdValve: () => ({ anomaly: 'normal', shutdownTime: 6, acceptableTime: 3, partialOpen: 30, airPressure: 5.5, minAirPressure: 4.0, tripElapsed: 0, tripping: false, lastTripDuration: 0, velocity: 0 }),
+  esdValve: () => ({ anomaly: 'normal', shutdownTime: 6, acceptableTime: 3, partialOpen: 30, airPressure: 5.5, minAirPressure: 4.0, tripElapsed: 0, tripping: false, lastTripDuration: 0, velocity: 0,
+    cyclePeriod: 5, cycleCount: 15, acceptableDelay: 1.0, delayInitial: 0.5, delayFinal: 5.0 }),   // cyclic response test
   ballValve: () => ({ anomaly: 'normal', operationTime: 12, acceptableTime: 5, leakage: 230, moveElapsed: 0, moving: false, lastMoveDuration: 0, lastCloseDuration: 0, lastOpenDuration: 0 }),
   safetyValve: () => ({ anomaly: 'normal', linePressure: 8.5, valveOpen: false, openCount: 0, openings: [], reliefCapacity: 1300 }),
   steamTrap: () => ({ anomaly: 'normal', inletTemp: 172, outletTemp: 98, pressure: 7.0 }),
@@ -30,6 +31,9 @@ export const simulationState = {
     tripped: false,
     status: 'NORMAL',
     sim: DEFAULT_SIMS.esdValve(),
+    // Last cyclic ON/OFF response test (kept for analytics even after the scenario is reset):
+    // { active, startSt, period, total, current, cycles: [{ index, cmdAt, delay }], lastDelay }
+    cycleTest: null,
   },
   vPortValve: {
     mode: 'normal',        // normal | positionMismatch | sticking | slowResponse | hunting | trimWear
@@ -219,6 +223,7 @@ export function setAnomalyScenario(component, anomaly = 'normal') {
     if (component === 'safetyValve' && anomaly === 'failureToOpen') st.safetyValve.sim.linePressure = set + 0.4;   // already above set, keeps rising
     if (component === 'safetyValve' && anomaly === 'pressureRelief') st.safetyValve.sim.linePressure = set - 0.6;  // overpressure event starts here
     if (component === 'esdValve' && anomaly === 'lowAirPressure') st.esdValve.sim.airPressure = 3.0;
+    if (component === 'esdValve' && anomaly === 'cyclicDegradation') st.esdValve.cycleTest = null;   // fresh cyclic test starts on the next tick
   }
   st.vPortValve.commandPosition = operatorCommand;
   st.vPortValve.actualPosition = operatorCommand;

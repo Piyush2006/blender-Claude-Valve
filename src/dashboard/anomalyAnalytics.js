@@ -1,6 +1,6 @@
 import { simulationState as S } from '../simulation/simulationState.js';
 import { fmt, THRESHOLDS, flowDeviationPercent } from '../simulation/units.js';
-import { ballStateText, ballResponseTime, ballStrokeInfo, esdStateText } from '../simulation/anomalyEngine.js';
+import { ballStateText, ballResponseTime, ballStrokeInfo, esdStateText, esdCycleStage } from '../simulation/anomalyEngine.js';
 import { ANOMALY_CATALOG } from '../simulation/anomalyCatalog.js';
 
 /**
@@ -19,7 +19,7 @@ export function targetFlow() {
 export function chartKind(componentId) {
   if (componentId === 'vPortValve') return 'position';
   if (componentId === 'ballValve') return 'ballResponse';
-  if (componentId === 'esdValve') return 'esdResponse';
+  if (componentId === 'esdValve') return S.esdValve.cycleTest ? 'esdCycle' : 'esdResponse';
   if (['safetyValve', 'steamTrap', 'checkValve', 'rotaryJoint', 'yankee'].includes(componentId)) return 'series';
   return 'flow';
 }
@@ -113,6 +113,22 @@ export function overviewMetrics(entry) {
       ],
     ];
   }
+  if (componentId === 'esdValve' && S.esdValve.cycleTest) {
+    const k = esdCycleSummary();
+    const bad = k.currentDelay > k.acceptable;
+    return [
+      [
+        { label: 'Command Cycle', value: `${k.period} sec`, sub: 'ON / OFF' },
+        { label: 'Cycles Analyzed', value: String(k.current), sub: `~${Math.round(k.durationS)} seconds${k.active ? ' · running' : ''}` },
+        { label: 'Initial Response', value: `${k.initial.toFixed(1)} sec`, sub: 'Cycles 1–3', tone: 'normal' },
+      ],
+      [
+        { label: 'Current Response', value: `${k.currentDelay.toFixed(1)} sec`, sub: k.lastRange, tone: bad ? 'attention' : 'normal' },
+        { label: 'Status', value: k.trend === 'Degrading' ? 'Degrading' : 'Stable', sub: k.stage.toLowerCase(), tone: k.trend === 'Degrading' ? 'attention' : 'normal' },
+        { label: 'Valve State', value: esdStateText(), sub: 'current' },
+      ],
+    ];
+  }
   // Generic: the anomaly's evidence lines (or the component's live values) in rows of three.
   const lines = entry?.lines?.length ? entry.lines : genericLines(componentId);
   const boxes = lines.map(([label, value]) => ({ label, value }));
@@ -133,9 +149,22 @@ function genericLines(componentId) {
   }
 }
 
+/** Summary of the ESD cyclic ON/OFF response test (null when none recorded). */
+export function esdCycleSummary() {
+  const e = S.esdValve, ct = e.cycleTest;
+  if (!ct) return null;
+  const first = ct.cycles.slice(0, 3), last = ct.cycles.slice(-4);
+  const avg = (arr) => (arr.length ? arr.reduce((a, c) => a + c.delay, 0) / arr.length : 0);
+  const initial = avg(first) || (e.sim.delayInitial ?? 0.5), current = ct.lastDelay || avg(last);
+  const stage = esdCycleStage(current, e.sim);
+  const trend = current > initial * 1.5 ? 'Degrading' : 'Stable';
+  return { period: ct.period, total: ct.total, current: ct.current, active: ct.active, durationS: 2 * ct.period * ct.total, initial, currentDelay: current, stage, trend, acceptable: e.sim.acceptableDelay, cycles: ct.cycles, lastRange: `Cycles ${Math.max(1, ct.current - 3)}–${ct.current}` };
+}
+
 /** Compact impact banner text. */
 export function impactText(entry) {
   if (!entry) return '';
+  if (entry.type === 'ESD_RESPONSE_DEGRADATION') return 'Valve response time is increasing over multiple cycles — steam isolation on a real trip would be delayed.';
   if (entry.componentId === 'vPortValve' && entry.type !== 'VPORT_TRIM_WEAR') return 'Steam flow is significantly below expected flow and may affect Yankee drying performance.';
   return `${entry.impact}.`;
 }
@@ -165,6 +194,11 @@ export function historicalFor(entry) {
   if (componentId === 'steamTrap') {
     const t = S.steamTrap.sim.outletTemp;
     return { title: 'Trap Outlet Temperature', rows: [['Today', fmt.temperature(t), 'normal'], ['Yesterday', fmt.temperature(98), 'normal'], ['7-Day Average', fmt.temperature(97), 'normal']], trend: Math.abs(t - 98) > 10 ? 'Worsening' : 'Stable' };
+  }
+  if (componentId === 'esdValve' && S.esdValve.cycleTest) {
+    const k = esdCycleSummary();
+    const rows = [['Today', fmt.seconds(k.currentDelay), k.currentDelay > k.acceptable ? 'attention' : 'normal'], ['Yesterday', fmt.seconds(0.6), 'normal'], ['7-Day Average', fmt.seconds(0.5), 'normal'], ['Acceptable', `< ${fmt.seconds(k.acceptable)}`, 'muted']];
+    return { title: 'ESD Response Delay', rows, trend: trendOf(k.currentDelay, 0.6) };
   }
   if (componentId === 'esdValve') {
     const sim = S.esdValve.sim; const t = sim.tripping ? sim.tripElapsed : sim.lastTripDuration || 0;
@@ -196,6 +230,14 @@ export function activityFor(componentId, entry, eventLog = []) {
     }
     if (entry.componentId === 'ballValve' && S.demo?.commandedAt) items.push({ t: S.demo.commandedAt, level: 'info', text: 'Valve close command issued (stroke test)' });
     if (entry.detectedAt) items.push({ t: entry.detectedAt, level: entry.level, text: 'Anomaly first detected' });
+  }
+  if (componentId === 'esdValve' && S.esdValve.cycleTest) {
+    const ct = S.esdValve.cycleTest, simNow = S.time, acc = S.esdValve.sim.acceptableDelay;
+    const wall = (st) => now - (simNow - st) * 1000;
+    const picks = [];                                           // first cycle + the first cycle of each stage + the latest
+    let lastStage = null;
+    for (const cy of ct.cycles) { const st = esdCycleStage(cy.delay, S.esdValve.sim); if (st !== lastStage || cy.index === ct.cycles.length) { picks.push(cy); lastStage = st; } }
+    for (const cy of picks) items.push({ t: wall(cy.cmdAt), level: cy.delay > acc ? 'attention' : 'normal', text: cy.delay > acc ? `ESD response delay ${cy.delay.toFixed(1)} sec (cycle ${cy.index})` : `ESD cycle normal (${cy.delay.toFixed(1)} sec)`, tag: cy.delay > acc ? 'Warning' : undefined });
   }
   for (const e of eventLog) if (e.componentId === componentId && !items.some((i) => Math.abs(i.t - e.t) < 500)) items.push({ t: e.t, level: e.level || 'info', text: e.event });
   for (const h of simulatedHistory(componentId)) items.push({ t: now - h.daysAgo * DAY, level: h.level, text: h.text, tag: h.level === 'attention' ? 'Warning' : h.level === 'critical' ? 'Critical' : undefined, past: true });
@@ -236,7 +278,7 @@ function simulatedHistory(componentId) {
       { daysAgo: 3, level: 'attention', text: 'Slow response · 6.2 s' },
       { daysAgo: 10, level: 'info', text: 'Maintenance — actuator inspection' },
     ];
-    case 'esdValve': return [{ daysAgo: 6, level: 'info', text: 'Partial-stroke test passed' }, { daysAgo: 30, level: 'info', text: 'Maintenance — solenoid replaced' }];
+    case 'esdValve': return [{ daysAgo: 2, level: 'info', text: 'Functional test completed' }, { daysAgo: 4, level: 'info', text: 'System operating normally' }, { daysAgo: 39, level: 'info', text: 'Maintenance — actuator checked' }];
     case 'safetyValve': return [{ daysAgo: 21, level: 'info', text: 'Bench test — set pressure verified' }];
     case 'steamTrap': return [{ daysAgo: 8, level: 'info', text: 'Trap survey — passing' }];
     case 'checkValve': return [{ daysAgo: 45, level: 'info', text: 'Maintenance — disc and spring inspected' }];

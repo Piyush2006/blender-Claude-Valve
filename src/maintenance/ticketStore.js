@@ -101,6 +101,10 @@ function describe(type, m) {
     }
     case 'ESD_FAIL_TO_CLOSE': case 'ESD_PARTIAL_CLOSURE': case 'ESD_SLOW_SHUTDOWN':
       return `Trip command CLOSE was issued; the ESD valve actual state is ${m.esdState}. Steam flow of ${f.flow(m.steamFlow)} continues downstream.`;
+    case 'ESD_RESPONSE_DEGRADATION': {
+      const ct = S.esdValve.cycleTest;
+      return `During a cyclic ON/OFF test (${ct?.period ?? 5} s command cycle, ${ct?.current ?? 0} of ${ct?.total ?? 15} cycles) the ESD valve response delay grew from ${(S.esdValve.sim.delayInitial ?? 0.5).toFixed(1)} s to ${(ct?.lastDelay ?? 0).toFixed(1)} s against an acceptable delay of less than ${S.esdValve.sim.acceptableDelay.toFixed(1)} s. Current state: ${m.esdState}.`;
+    }
     case 'ESD_LOW_AIR':
       return `Instrument air pressure is ${f.pressure(S.esdValve.sim.airPressure)} against a minimum of ${f.pressure(S.esdValve.sim.minAirPressure)}; the actuator cannot complete its stroke (state ${m.esdState}).`;
     case 'BALL_FAIL_TO_OPEN': case 'BALL_FAIL_TO_CLOSE':

@@ -3,8 +3,8 @@ import { snapshot, fmt, THRESHOLDS } from './dashboardData.js';
 import { LEVEL_LABEL, flowDeviationPercent } from '../simulation/units.js';
 import { ANOMALY_CATALOG } from '../simulation/anomalyCatalog.js';
 import { createSchematic } from './schematic.js';
-import { overviewMetrics, impactText, historicalFor, activityFor, chartKind, targetFlow, seriesChartFor } from './anomalyAnalytics.js';
-import { createPositionChart, createBallResponseChart, createFlowChart, createSeriesChart, CHART_COLORS } from './anomalyCharts.js';
+import { overviewMetrics, impactText, historicalFor, activityFor, chartKind, targetFlow, seriesChartFor, esdCycleSummary } from './anomalyAnalytics.js';
+import { createPositionChart, createBallResponseChart, createFlowChart, createSeriesChart, createEsdCycleChart, CHART_COLORS } from './anomalyCharts.js';
 import { positionHistory, ballSamplesWallClock, esdSamplesWallClock, processSamplesWallClock } from './liveHistory.js';
 import { knowledgeFor } from '../maintenance/knowledge.js';
 import { ticketsFor, onTicketsChange, openTicketCount, tickets as allTickets, historicalComparison, trendSeries } from '../maintenance/ticketStore.js';
@@ -234,14 +234,14 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
     const tabs = [['overview', 'Overview'], ['analytics', 'Analytics'], ['causes', 'Possible Causes'], ['recommendations', 'Recommendations'], ['activity', 'Activity']];
     setHtml('tabs', detailTabs, tabs.map(([id, l]) => `<button type="button" data-tab="${id}" class="${id === view.tab ? 'is-active' : ''}">${l}</button>`).join(''));
 
-    const key = `${selectedId}:${entry?.type || 'normal'}:${view.tab}:${view.range}`;
+    const key = `${selectedId}:${entry?.type || 'normal'}:${view.tab}:${view.range}:${selectedId === 'esdValve' ? (simulationState.esdValve.cycleTest ? `ct${simulationState.esdValve.cycleTest.current}${simulationState.esdValve.cycleTest.active ? 'r' : 'd'}` : 'none') : ''}`;
     const structural = rebuild || cache.detailKey !== key;
     cache.detailKey = key;
     if (view.tab === 'overview') {
       const html = `<div class="ov-grid">
         <div class="ov-left">
           ${metricsHtml(entry, selectedId)}
-          <div class="impact is-${level}"><b>${entry ? 'Impact:' : 'Status:'}</b> ${entry ? esc(impactText(entry)) : 'Component operating normally. Live values shown above.'}</div>
+          ${impactBanner(entry, selectedId, level)}
         </div>
         <div class="ov-right">
           <div class="chart-head"><h4>${chartTitle(selectedId, 'overview')}</h4>${rangeSelect(selectedId)}</div>
@@ -290,6 +290,12 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
   }
   function patch(sel, html) { const el = detailBody.querySelector(sel); if (el && el.innerHTML !== html) el.innerHTML = html; }
 
+  function impactBanner(entry, selectedId, level) {
+    if (entry) return `<div class="impact is-${level}"><b>Impact:</b> ${esc(impactText(entry))}</div>`;
+    const k = selectedId === 'esdValve' ? esdCycleSummary() : null;
+    if (k && k.trend === 'Degrading') return `<div class="impact is-attention"><b>Status: Degrading</b> — valve response time is increasing over multiple cycles (last cyclic test: ${k.initial.toFixed(1)} s → ${k.currentDelay.toFixed(1)} s).</div>`;
+    return `<div class="impact is-normal"><b>Status:</b> Component operating normally. Live values shown above.</div>`;
+  }
   function metricsHtml(entry, selectedId) {
     const rows = overviewMetrics(entry || { componentId: selectedId, lines: [] });
     return `<div data-metrics><div class="metrics">${rows.map((row) => `<div class="metric-row cols-${row.length}">${row.map((m) => `<div class="metric tone-${m.tone || 'plain'}"><span>${esc(m.label)}</span><b class="mono">${esc(m.value)}</b>${m.sub ? `<small>${esc(m.sub)}</small>` : ''}</div>`).join('')}</div>`).join('')}</div></div>`;
@@ -305,12 +311,14 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
     if (kind === 'position') return `Command vs Actual Position${where === 'analytics' ? '' : ` — ${RANGES.find((r) => r[0] === view.range)[1]}`}`;
     if (kind === 'ballResponse') return 'Ball Valve Open/Close Response';
     if (kind === 'esdResponse') return 'ESD Trip Response';
+    if (kind === 'esdCycle') { const k = esdCycleSummary(); return `ESD Valve Command vs Actual State — ${k?.current || 0} Cycles`; }
     if (kind === 'series') return seriesChartFor(id)?.title || 'Trend';
     return 'Steam Flow vs Expected';
   }
   function rangeSelect(id) {
     const kind = chartKind(id);
     if (kind === 'ballResponse' || kind === 'esdResponse') return `<span class="note">last stroke · live samples</span>`;
+    if (kind === 'esdCycle') { const k = esdCycleSummary(); return `<span class="note">${k?.active ? 'cycle test running' : 'cyclic ON/OFF test'} · ${k?.period || 5} s command cycle</span>`; }
     if (kind === 'series') return `<span class="note">last 10 min · ${esc(seriesChartFor(id)?.note || '')}</span>`;
     return `<select data-range class="range">${RANGES.map(([v, l]) => `<option value="${v}" ${v === view.range ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
   }
@@ -318,6 +326,7 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
     const kind = chartKind(id);
     if (kind === 'position') return `<div class="legend-row"><span><i style="background:${CHART_COLORS.cmd}"></i>Commanded (%)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual (%)</span><span><i style="background:${CHART_COLORS.gap};border:1px solid rgba(220,38,38,0.4)"></i>Deviation</span></div>`;
     if (kind === 'ballResponse') return `<div class="legend-row"><span><i style="background:${CHART_COLORS.cmd}"></i>Command (OPEN / CLOSE)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual state</span><span><i style="background:${CHART_COLORS.lag};border:1px solid rgba(245,158,11,0.5)"></i>Response lag</span></div>`;
+    if (kind === 'esdCycle') return `<div class="legend-row"><span><i style="background:${CHART_COLORS.cmd}"></i>Command</span><span><i style="background:${CHART_COLORS.act}"></i>Actual</span><span><i style="background:${CHART_COLORS.lag};border:1px solid rgba(245,158,11,0.5)"></i>Response lag</span><span><i style="background:rgba(220,38,38,0.12);border:1px solid rgba(220,38,38,0.4)"></i>Degrading cycles</span></div>`;
     if (kind === 'esdResponse') return `<div class="legend-row"><span><i style="background:${CHART_COLORS.cmd}"></i>Trip command (OPEN / CLOSE)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual state</span><span><i style="background:${CHART_COLORS.lag};border:1px solid rgba(245,158,11,0.5)"></i>Shutdown lag</span></div>`;
     if (kind === 'series') { const def = seriesChartFor(id); return `<div class="legend-row">${(def?.legend || []).map(([l, color, dashed]) => `<span><i style="background:${color};${dashed ? 'height:0;border-top:2px dashed ' + color + ';' : ''}"></i>${esc(l)}</span>`).join('')}</div>`; }
     return `<div class="legend-row"><span><i style="background:${CHART_COLORS.flow}"></i>Steam flow (kg/h)</span><span><i style="background:${CHART_COLORS.expected}"></i>Expected</span></div>`;
@@ -329,6 +338,7 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
     const height = host.classList.contains('tall') ? 240 : 150;
     view.chart = kind === 'position' ? createPositionChart(host, { height })
       : kind === 'ballResponse' || kind === 'esdResponse' ? createBallResponseChart(host, { height })
+      : kind === 'esdCycle' ? createEsdCycleChart(host, { height: Math.max(200, height + 30) })
       : kind === 'series' ? createSeriesChart(host, { height })
       : createFlowChart(host, { height });
     view.chartFor = kind;
@@ -339,12 +349,21 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
     const kind = chartKind(id);
     if (kind === 'ballResponse') view.chart.update(ballSamplesWallClock(), { windowMs: 40 * 1000, acceptable: simulationState.ballValve.sim.acceptableTime });
     else if (kind === 'esdResponse') view.chart.update(esdSamplesWallClock(), { windowMs: 40 * 1000, acceptable: simulationState.esdValve.sim.acceptableTime });
+    else if (kind === 'esdCycle') view.chart.update(esdSamplesWallClock(), esdTestWallClock(), { acceptable: simulationState.esdValve.sim.acceptableDelay });
     else if (kind === 'series') { const def = seriesChartFor(id, entry); if (def) view.chart.update(processSamplesWallClock(), def.spec); }
     else {
       const live = view.range === '10m' || view.range === '60m';
       const pts = live ? positionHistory : trendSeries(view.range, entry?.detectedAt);
       view.chart.update(pts, { rangeMs: RANGE_MS[view.range], onsetAt: entry?.detectedAt || null });
     }
+  }
+
+  /** Cycle-test record with wall-clock start / end for the chart. */
+  function esdTestWallClock() {
+    const ct = simulationState.esdValve.cycleTest; if (!ct) return null;
+    const now = Date.now(), simNow = simulationState.time;
+    const wall = (st) => now - (simNow - st) * 1000;
+    return { startAt: wall(ct.startSt), endAt: wall(ct.active ? simNow : ct.endSt), period: ct.period, total: ct.total, cycles: ct.cycles };
   }
 
   /* ------------------------------ recent activity ------------------------------ */

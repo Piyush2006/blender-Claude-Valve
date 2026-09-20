@@ -140,6 +140,52 @@ function updateBallValve(dt) {
 /* ------------------------------------------------------------------------------- */
 /* ESD valve (spring-return isolation; command 100 = open, 0 = trip/close)           */
 /* ------------------------------------------------------------------------------- */
+
+/** Response dead time for cycle k of the cyclic test (demo schedule, s). */
+export function esdCycleDelay(k, sim) {
+  const d0 = sim.delayInitial ?? 0.5, dF = sim.delayFinal ?? 5.0;
+  if (k <= 3) return d0;                                   // normal
+  if (k <= 7) return 1.0 + ((k - 4) / 3) * 1.0;            // slight delay 1 → 2 s
+  if (k <= 11) return 2.0 + ((k - 8) / 3) * 1.0;           // degrading 2 → 3 s
+  return 4.0 + ((k - 12) / 3) * (dF - 4.0);                // slow response 4 → 5 s
+}
+
+/** Command of the duty cycle at sim time t: CLOSE for the first half of each cycle, then OPEN. */
+function esdCycleCommandAt(ct, t) {
+  const el = t - ct.startSt;
+  if (el < 0) return 100;
+  const k = Math.floor(el / (2 * ct.period));
+  if (k >= ct.total) return 100;
+  return (el - k * 2 * ct.period) < ct.period ? 0 : 100;
+}
+
+export function startEsdCycleTest(e, sim, startSt = S.time) {
+  e.cycleTest = { active: true, startSt, period: sim.cyclePeriod, total: sim.cycleCount, current: 0, cycles: [], lastDelay: 0, endSt: startSt + 2 * sim.cyclePeriod * sim.cycleCount };
+  return e.cycleTest;
+}
+
+function runEsdCycleTest(e, sim) {
+  let ct = e.cycleTest;
+  if (!ct) ct = startEsdCycleTest(e, sim);                 // scenario selection clears the previous test
+  const t = S.time;
+  if (ct.active) {
+    const el = t - ct.startSt;
+    const k = Math.min(ct.total, Math.floor(el / (2 * ct.period)) + 1);
+    if (k > ct.current) {                                   // a new cycle starts (CLOSE command issued)
+      for (let i = ct.current + 1; i <= k; i++) ct.cycles.push({ index: i, cmdAt: ct.startSt + (i - 1) * 2 * ct.period, delay: esdCycleDelay(i, sim) });
+      ct.current = k;
+    }
+    ct.lastDelay = esdCycleDelay(ct.current, sim);
+    e.command = esdCycleCommandAt(ct, t);
+    if (el >= 2 * ct.period * ct.total) { ct.active = false; ct.finishedBy = 'cyclicDegradation'; e.command = 100; }
+  } else {
+    e.command = 100;                                         // test finished: valve released to OPEN
+  }
+  // Delayed command: what the actuator is acting on right now.
+  const delay = ct.current ? esdCycleDelay(ct.current, sim) : 0;
+  ct.delayedCommand = ct.active ? esdCycleCommandAt(ct, t - delay) : (t - ct.endSt < delay ? esdCycleCommandAt(ct, t - delay) : 100);
+  return ct;
+}
 function updateEsdValve(dt) {
   const e = S.esdValve, sim = e.sim;
   const closing = e.command < e.position;
@@ -155,6 +201,15 @@ function updateEsdValve(dt) {
     case 'partialClosure':
       if (e.command === 0) target = sim.partialOpen;                  // stops part-way
       break;
+    case 'cyclicDegradation': {
+      // Repeated ON/OFF duty cycle (command flips every `cyclePeriod` s). The actuator answers
+      // with a dead time that grows cycle by cycle: ~0.5 s (1–3) → 1–2 s (4–7) → 2–3 s (8–11)
+      // → 4–5 s (12–15). Steam is isolated while CLOSED; nothing else changes automatically.
+      const ct = runEsdCycleTest(e, sim);
+      target = ct.delayedCommand;
+      rate = 250;                                                     // healthy stroke once it responds (~0.4 s)
+      break;
+    }
     case 'lowAirPressure': {
       // Double-acting actuator: below the minimum the stroke authority collapses —
       // the valve moves sluggishly and stalls part-way (cannot complete the closure).

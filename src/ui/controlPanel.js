@@ -6,7 +6,7 @@ import {
 } from '../simulation/simulationState.js';
 import { ANOMALY_CATALOG, COMPONENT_ORDER, anomalyDef } from '../simulation/anomalyCatalog.js';
 import { detectionText, anomalyShortName } from './detection.js';
-import { esdStateText, ballStateText } from '../simulation/anomalyEngine.js';
+import { esdCycleStage, esdStateText, ballStateText } from '../simulation/anomalyEngine.js';
 import { fmt, UNITS } from '../simulation/units.js';
 
 /**
@@ -167,6 +167,16 @@ export function createControlPanel(container, { cameraRig, onValveXray }) {
           <label class="slider-label" data-anom="partialClosure">Stops At <b class="mono" id="esd-partial-val"></b>
             <input id="esd-partial" type="range" min="5" max="80" step="5" data-sim="esdValve:partialOpen" />
           </label>
+          <label class="slider-label" data-anom="cyclicDegradation">Command Cycle <b class="mono" id="esd-cycle-val"></b>
+            <input id="esd-cycle" type="range" min="2" max="10" step="1" data-sim="esdValve:cyclePeriod" />
+          </label>
+          <label class="slider-label" data-anom="cyclicDegradation">Cycles <b class="mono" id="esd-cycles-val"></b>
+            <input id="esd-cycles" type="range" min="10" max="15" step="1" data-sim="esdValve:cycleCount" />
+          </label>
+          <label class="slider-label" data-anom="cyclicDegradation">Acceptable Delay <b class="mono" id="esd-accdelay-val"></b>
+            <input id="esd-accdelay" type="range" min="0.5" max="3" step="0.5" data-sim="esdValve:acceptableDelay" />
+          </label>
+          <div class="kv" data-anom="cyclicDegradation"><div><span>Cycle</span><b id="esd-cycle-now" class="mono"></b></div><div><span>Response Delay</span><b id="esd-cycle-delay" class="mono"></b></div></div>
           <label class="slider-label" data-anom="lowAirPressure">Air Pressure <b class="mono" id="esd-air-val"></b>
             <input id="esd-air" type="range" min="0" max="7" step="0.1" data-sim="esdValve:airPressure" />
           </label>
@@ -430,6 +440,12 @@ export function createControlPanel(container, { cameraRig, onValveXray }) {
     setText($$['esd-partial-val'], `${e.sim.partialOpen}% open`);
     setText($$['esd-air-val'], fmt.pressure(e.sim.airPressure));
     setText($$['esd-minair'], fmt.pressure(e.sim.minAirPressure));
+    setText($$['esd-cycle-val'], `${e.sim.cyclePeriod} s ON / OFF`);
+    setText($$['esd-cycles-val'], String(e.sim.cycleCount));
+    setText($$['esd-accdelay-val'], fmt.seconds(e.sim.acceptableDelay));
+    const ct = e.cycleTest;
+    setText($$['esd-cycle-now'], ct ? `${ct.current} / ${ct.total}${ct.active ? '' : ' · done'}` : '—');
+    setText($$['esd-cycle-delay'], ct && ct.current ? `${fmt.seconds(ct.lastDelay)} · ${esdCycleStage(ct.lastDelay, e.sim)}` : '—');
     setText($$['esd-state'], esdStateText());
     setText($$['esd-flow'], fmt.flow(s.steam.flow));
 

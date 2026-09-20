@@ -4,6 +4,8 @@
  *   createPositionChart     — V-Port commanded vs actual position (%), the gap shaded red
  *   createBallResponseChart — Ball valve OPEN/CLOSE command step vs actual state, lag shaded amber
  *   createFlowChart         — steam flow vs expected (generic fallback)
+ *   createEsdCycleChart     — ESD cyclic ON/OFF test: command square wave vs actual state over
+ *                             10–15 cycles, degrading cycles shaded, cycle markers C1…Cn
  *   createSeriesChart       — configurable time-series chart (left/right axes, reference lines,
  *                             shaded bands) used for the ESD, safety valve, trap, check valve,
  *                             rotary joint and Yankee views
@@ -231,6 +233,54 @@ export function createSeriesChart(host, { height = 170 } = {}) {
       if (!s.dash) c.svg.appendChild(svgEl('circle', { cx: x(last.t), cy: y(last[s.key]), r: 3.5, fill: s.color, stroke: '#fff', 'stroke-width': 1.5 }));
     }
     if (spec.onsetAt && spec.onsetAt >= t0 && spec.onsetAt <= t1) { const xm = x(spec.onsetAt); c.line(xm, T, xm, H - B, 'rgba(220,38,38,0.6)', '3 3'); }
+  }
+  return { update };
+}
+
+/* ------------------------------ ESD cyclic response test ------------------------------ */
+/**
+ * points: { t, cmd, pos } (wall clock); test: { startAt, endAt, period, total, cycles: [{ index, delay }] }
+ * X axis = seconds since the test started; Y = valve state. Cycles whose delay exceeds
+ * `degradeFrom` are shaded and annotated; cycle markers are drawn below the axis.
+ */
+export function createEsdCycleChart(host, { height = 200 } = {}) {
+  const c = base(host, height);
+  function update(points, test, { acceptable = 1, degradeFrom = 2 } = {}) {
+    const { W, H, T } = c.frame();
+    const B = 46, L = 52, R = 12;
+    if (!test || !points || points.length < 2) { c.text(W / 2, H / 2, 'no cycle test recorded', 'middle'); return; }
+    const t0 = test.startAt, t1 = test.endAt + 6000;
+    const pts = points.filter((p) => p.t >= t0 - 1000 && p.t <= t1);
+    const x = (t) => L + ((t - t0) / Math.max(1, t1 - t0)) * (W - L - R);
+    const y = (v) => T + 18 + (1 - Math.max(0, Math.min(100, v)) / 100) * (H - T - B - 18);
+    // degrading region
+    const firstBad = test.cycles.find((cy) => cy.delay > degradeFrom);
+    if (firstBad) {
+      const xs = x(t0 + (firstBad.index - 1) * 2 * test.period * 1000);
+      c.svg.appendChild(svgEl('rect', { x: xs, y: T, width: W - R - xs, height: H - T - B, fill: 'rgba(220,38,38,0.07)' }));
+      c.text(W - R - 4, T + 9, 'Increasing response delay (degrading) →', 'end', '#DC2626');
+    }
+    c.line(L, y(100), W - R, y(100), 'rgba(15,23,42,0.08)'); c.line(L, y(0), W - R, y(0), 'rgba(15,23,42,0.08)');
+    c.text(L - 5, y(100) + 3, 'OPEN', 'end'); c.text(L - 5, y(0) + 3, 'CLOSED', 'end');
+    // time axis in seconds since test start
+    const totalS = (t1 - t0) / 1000, stepS = totalS > 100 ? 10 : 5;
+    for (let sec = 0; sec <= totalS; sec += stepS) { const xx = x(t0 + sec * 1000); c.line(xx, y(0), xx, y(0) + 3, 'rgba(15,23,42,0.35)'); c.text(xx, y(0) + 13, String(sec), 'middle'); }
+    c.text((L + W - R) / 2, H - 22, 'Time (seconds)', 'middle');
+    // cycle markers
+    for (const cy of test.cycles) {
+      const xs = x(t0 + (cy.index - 1) * 2 * test.period * 1000), xe = x(t0 + cy.index * 2 * test.period * 1000);
+      const bad = cy.delay > acceptable;
+      c.svg.appendChild(svgEl('rect', { x: xs + 1, y: H - 16, width: Math.max(2, xe - xs - 2), height: 13, rx: 3, fill: bad ? (cy.delay > degradeFrom ? 'rgba(220,38,38,0.12)' : 'rgba(245,158,11,0.16)') : 'rgba(15,23,42,0.05)' }));
+      if (xe - xs > 18) c.text((xs + xe) / 2, H - 6, `C${cy.index}`, 'middle', bad ? (cy.delay > degradeFrom ? '#DC2626' : '#B45309') : undefined);
+    }
+    if (pts.length > 1) {
+      const step = [];
+      for (let i = 0; i < pts.length; i++) { const p = pts[i]; if (i && pts[i - 1].cmd !== p.cmd) step.push({ t: p.t, v: pts[i - 1].cmd }); step.push({ t: p.t, v: p.cmd }); }
+      const lagD = linePath(step, (p) => x(p.t), (p) => y(p.v)) + ' ' + [...pts].reverse().map((p) => `L${x(p.t).toFixed(1)},${y(p.pos).toFixed(1)}`).join(' ') + ' Z';
+      c.path(lagD, 'none', 0, null, CHART_COLORS.lag);
+      c.path(linePath(step, (p) => x(p.t), (p) => y(p.v)), CHART_COLORS.cmd, 1.8);
+      c.path(linePath(pts, (p) => x(p.t), (p) => y(p.pos)), CHART_COLORS.act, 2);
+    }
   }
   return { update };
 }

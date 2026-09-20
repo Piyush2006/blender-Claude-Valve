@@ -1,5 +1,5 @@
 import { simulationState as S } from '../simulation/simulationState.js';
-import { ANOMALY_LABELS, esdStateText, ballStateText, ballResponseTime, ballStrokeInfo } from '../simulation/anomalyEngine.js';
+import { ANOMALY_LABELS, esdStateText, ballStateText, ballResponseTime, ballStrokeInfo, esdCycleStage } from '../simulation/anomalyEngine.js';
 import { anomalyByType, ANOMALY_CATALOG } from '../simulation/anomalyCatalog.js';
 import { UNITS, THRESHOLDS, fmt, flowDeviationPercent, levelOfStatus, levelOfDeviation, maxLevel, SYSTEM_LABEL } from '../simulation/units.js';
 
@@ -115,6 +115,7 @@ function statusRows() {
   if (esd.sim.anomaly === 'lowAirPressure') { esdRow.param = 'Air Pressure'; esdRow.value = `${fmt.pressure(esd.sim.airPressure)} (min ${fmt.pressure(esd.sim.minAirPressure)})`; esdRow.notes = `State ${esdStateText()}`; }
   if (flagged('esdValve')) esdRow.notes += ` · ${flagged('esdValve')}`;
   esdRow.state = title(esdStateText());
+  if (esd.sim.anomaly === 'cyclicDegradation' && esd.cycleTest) esdRow.state = `${title(esdStateText())} · cycle ${esd.cycleTest.current}/${esd.cycleTest.total} · delay ${fmt.seconds(esd.cycleTest.lastDelay)}`;
   if (esd.sim.anomaly === 'lowAirPressure' && flagged('esdValve')) esdRow.state = `${title(esdStateText())} · air ${fmt.pressure(esd.sim.airPressure)}`;
 
   // V-Port — control valve: position error, or flow deviation for trim wear.
@@ -180,6 +181,11 @@ export function anomalyEntry(a, ctx = null) {
       if (a.type === 'ESD_SLOW_SHUTDOWN') lines.push(['Shutdown Time', fmt.seconds(S.esdValve.sim.tripping ? S.esdValve.sim.tripElapsed : S.esdValve.sim.lastTripDuration)]);
       lines.push(['Steam Flow', fmt.flow(S.steam.flow)]);
       break;
+    case 'ESD_RESPONSE_DEGRADATION': {
+      const ct = S.esdValve.cycleTest;
+      lines.push(['Cycle', ct ? `${ct.current} / ${ct.total}` : '—'], ['Response Delay', fmt.seconds(ct?.lastDelay || 0)], ['Expected', `< ${fmt.seconds(S.esdValve.sim.acceptableDelay)}`], ['Stage', esdCycleStage(ct?.lastDelay || 0)]);
+      break;
+    }
     case 'ESD_LOW_AIR':
       lines.push(['Air Pressure', fmt.pressure(S.esdValve.sim.airPressure)], ['Minimum Required', fmt.pressure(S.esdValve.sim.minAirPressure)], ['Trip Command', S.esdValve.command === 0 ? 'CLOSE' : 'NONE'], ['Actual State', esdStateText()]);
       break;
@@ -239,6 +245,7 @@ function subtitleFor(type) {
     case 'ESD_SLOW_SHUTDOWN': return 'Shutdown slower than acceptable';
     case 'ESD_PARTIAL_CLOSURE': return 'Valve stopped part-way on trip';
     case 'ESD_LOW_AIR': return 'Instrument air below minimum';
+    case 'ESD_RESPONSE_DEGRADATION': return 'Valve response time is increasing over multiple cycles';
     case 'PSV_UNEXPECTED_OPENING': return 'Lifting below set pressure';
     case 'PSV_FAILURE_TO_OPEN': return 'Pressure above set, valve closed';
     case 'PSV_CHATTERING': return 'Rapid open / close cycling';
@@ -260,6 +267,7 @@ function impactFor(type) {
     case 'VPORT_HUNTING': return 'Oscillating steam flow — cyclic drying variation';
     case 'ESD_FAIL_TO_CLOSE': case 'ESD_PARTIAL_CLOSURE': case 'ESD_LOW_AIR': return 'Steam isolation not guaranteed on shutdown demand';
     case 'ESD_SLOW_SHUTDOWN': return 'Delayed steam isolation on trip';
+    case 'ESD_RESPONSE_DEGRADATION': return 'Steam isolation is getting slower with every cycle — trip response no longer guaranteed';
     case 'BALL_FAIL_TO_OPEN': return 'No steam to the Yankee — production impact';
     case 'BALL_FAIL_TO_CLOSE': case 'BALL_PASSING': return 'Steam line cannot be fully isolated';
     case 'BALL_SLOW_OPERATION': return 'Steam isolation is delayed — the valve takes longer than expected to close';

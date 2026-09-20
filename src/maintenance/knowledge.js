@@ -44,6 +44,11 @@ const KB = {
     recommendations: ['Confirm actual position with local indicator', 'Inspect valve internals for obstruction', 'Verify actuator sizing for shut-off pressure', 'Check travel stops and linkage'],
     rootCauses: ['Seat obstruction', 'Galling', 'Actuator undersized', 'Travel stop misadjusted'],
   },
+  ESD_RESPONSE_DEGRADATION: {
+    causes: ['Solenoid / pilot valve sluggish (contamination, coil ageing)', 'Actuator seal friction increasing', 'Exhaust port or silencer partially blocked', 'Instrument air quality (moisture, oil)', 'Spring pack fatigue'],
+    recommendations: ['Trend response delay over repeated cycles and schedule actuator service', 'Inspect / replace solenoid and pilot valve', 'Clean exhaust silencers and check quick-exhaust', 'Check instrument air dryness and filtration', 'Perform a full-stroke test before returning to service'],
+    rootCauses: ['Solenoid sluggish', 'Actuator friction', 'Exhaust restriction', 'Air quality', 'Spring fatigue'],
+  },
   ESD_LOW_AIR: {
     causes: ['Instrument air compressor / dryer problem', 'Leaking tubing or fittings', 'Blocked filter-regulator', 'Air header isolation partially closed'],
     recommendations: ['Check instrument air header pressure (bar)', 'Inspect filter-regulator and replace element', 'Leak-test tubing and fittings', 'Confirm air receiver capacity for trip demand'],

@@ -38,6 +38,7 @@ export const ANOMALY_LABELS = {
   ESD_SLOW_SHUTDOWN: 'ESD Slow Shutdown',
   ESD_PARTIAL_CLOSURE: 'ESD Partial Closure',
   ESD_LOW_AIR: 'ESD Low Pneumatic Air Pressure',
+  ESD_RESPONSE_DEGRADATION: 'ESD Response Degradation',
   BALL_FAIL_TO_OPEN: 'Ball Valve Fail to Open',
   BALL_FAIL_TO_CLOSE: 'Ball Valve Fail to Close',
   BALL_SLOW_OPERATION: 'Ball Valve Slow Response',
@@ -218,6 +219,13 @@ function detectEsd(anomaly) {
     }
     case 'partialClosure':
       return { condition: tripped && e.position > 5 && e.position < 95 && Math.abs(sim.velocity) < 1, type: 'ESD_PARTIAL_CLOSURE', detail: `trip CLOSE · stopped at ${Math.round(e.position)}% open` };
+    case 'cyclicDegradation': {
+      const ct = e.cycleTest;
+      const d = ct?.lastDelay || 0;
+      const stage = esdCycleStage(d, sim);
+      return { condition: !!ct && ct.current >= 4 && d > sim.acceptableDelay, type: 'ESD_RESPONSE_DEGRADATION',
+        detail: ct ? `cycle ${ct.current}/${ct.total} · response ${d.toFixed(1)} s (acceptable < ${sim.acceptableDelay.toFixed(1)} s) · ${stage}` : 'cycle test not started' };
+    }
     case 'lowAirPressure': {
       const low = sim.airPressure < sim.minAirPressure;
       const stalled = tripped && e.position > 5 && Math.abs(sim.velocity) < 1;
@@ -227,6 +235,14 @@ function detectEsd(anomaly) {
     default:
       return { condition: false, type: null, detail: `actual ${state}` };
   }
+}
+
+/** Stage of the cyclic response test for a given dead time (demo bands). */
+export function esdCycleStage(delay, sim = S.esdValve.sim) {
+  if (delay <= Math.max(0.75, sim.acceptableDelay * 0.75)) return 'NORMAL';
+  if (delay <= 2.0) return 'SLIGHT DELAY';
+  if (delay <= 3.5) return 'DEGRADING';
+  return 'SLOW RESPONSE';
 }
 
 export function esdStateText() {

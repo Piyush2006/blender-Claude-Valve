@@ -1,7 +1,8 @@
 import { simulationState as S, setAnomalyScenario, setVPortActual, setComponentAnomaly, notify } from './simulationState.js';
 import { presetDetection, tickAnomalies } from './anomalyEngine.js';
 import { tickSimulation } from './simulationEngine.js';
-import { seedPositionHistory, seedBallStroke, seedProcessHistory } from '../dashboard/liveHistory.js';
+import { seedPositionHistory, seedBallStroke, seedProcessHistory, seedEsdCycleTest } from '../dashboard/liveHistory.js';
+import { esdCycleDelay } from './simulationEngine.js';
 
 /**
  * Boot demo scenario — two technically different anomalies, ALREADY PRESENT when the
@@ -21,6 +22,7 @@ import { seedPositionHistory, seedBallStroke, seedProcessHistory } from '../dash
 export const DEMO = {
   vPortCommand: 70, vPortActual: 32, vPortDetectedAgoMin: 37,
   ballOperationTime: 8.5, ballAcceptableTime: 2, ballDetectedAgoMin: 18, holdClosedSeconds: 4,
+  esdTestAgoMin: 22,      // a completed 15-cycle ESD response test (analytics only; ESD itself is NORMAL)
 };
 
 export function loadDemoScenario() {
@@ -57,6 +59,14 @@ export function loadDemoScenario() {
   // separator level…) settle on the demo operating point before the history is backfilled.
   for (let i = 0; i < 80; i++) tickSimulation(0.1);
   seedProcessHistory();
+  // ESD: a completed cyclic ON/OFF response test recorded ~22 min ago (analytics + activity;
+  // the valve is OPEN and NORMAL now — the record is what the manager reviews).
+  const esim = S.esdValve.sim;
+  const agoS = DEMO.esdTestAgoMin * 60;
+  const { startSt, endSt } = seedEsdCycleTest({ agoS, period: esim.cyclePeriod, total: esim.cycleCount, delayFor: (k) => esdCycleDelay(k, esim) });
+  S.esdValve.cycleTest = { active: false, finishedBy: 'seed', startSt, endSt, period: esim.cyclePeriod, total: esim.cycleCount, current: esim.cycleCount,
+    cycles: Array.from({ length: esim.cycleCount }, (_, i) => ({ index: i + 1, cmdAt: startSt + i * 2 * esim.cyclePeriod, delay: esdCycleDelay(i + 1, esim) })),
+    lastDelay: esdCycleDelay(esim.cycleCount, esim) };
   tickAnomalies(0);
   notify();
 }

@@ -26,6 +26,7 @@ export const ANOMALY_CATALOG = {
       { id: 'slowShutdown', label: 'Slow Shutdown', type: 'ESD_SLOW_SHUTDOWN', short: 'SLOW SHUTDOWN', severity: 'warning', explain: 'ESD closes slower than the acceptable shutdown time.' },
       { id: 'partialClosure', label: 'Partial Closure', type: 'ESD_PARTIAL_CLOSURE', short: 'PARTIAL CLOSURE', severity: 'anomaly', explain: 'ESD stops part-way on trip — steam continues downstream.' },
       { id: 'lowAirPressure', label: 'Low Instrument Air', type: 'ESD_LOW_AIR', short: 'LOW AIR PRESSURE', severity: 'anomaly', explain: 'Instrument air below minimum — actuator cannot complete its stroke.' },
+      { id: 'cyclicDegradation', label: 'Cyclic Response Degradation', type: 'ESD_RESPONSE_DEGRADATION', short: 'RESPONSE DEGRADING', severity: 'warning', explain: 'Repeated ON/OFF cycles: the response delay grows — normal → slight delay → degrading → slow response.' },   // predictive: attention
     ],
   },
   ballValve: {
