@@ -1,5 +1,6 @@
 import { simulationState as S, notify } from './simulationState.js';
 import { tickAnomalies } from './anomalyEngine.js';
+import { tickDemoScenario } from './demoScenario.js';
 
 /**
  * Advances the simulation. All derived values (flow, pressures, segment
@@ -96,9 +97,12 @@ export function tickSimulation(dt) {
   S.paper.speedMpm = round1(surfaceSpeed * 60);
   S.paper.travel += surfaceSpeed * dt;
   S.yankee.surfaceTemp = Math.round(60 + 60 * Math.min(1, fraction * 1.2));
+  // Paper moisture after the Yankee (demo model): rises when steam flow falls below nominal.
+  S.paper.moisture = Math.round((4.2 + 2.2 * Math.max(0, 0.70 - fraction) + 0.05 * Math.sin(S.time * 0.7)) * 100) / 100;
 
   // --- Anomaly engine (phase 2 — currently a no-op that keeps every status NORMAL) ---
   tickAnomalies(dt);
+  tickDemoScenario(dt);
 
   notify();
 }
@@ -127,7 +131,10 @@ function updateBallValve(dt) {
   const away = Math.abs(b.command - b.position) > 0.5;
   if (away && !sim.moving) { sim.moving = true; sim.moveElapsed = 0; sim.lastMoveDuration = 0; }
   if (sim.moving) sim.moveElapsed += dt;
-  if (sim.moving && !away) { sim.moving = false; sim.lastMoveDuration = sim.moveElapsed; }
+  if (sim.moving && !away) {
+    sim.moving = false; sim.lastMoveDuration = sim.moveElapsed;
+    if (b.command === 0) sim.lastCloseDuration = sim.moveElapsed; else sim.lastOpenDuration = sim.moveElapsed;
+  }
 }
 
 /* ------------------------------------------------------------------------------- */
@@ -200,7 +207,7 @@ function updateSafetyValve(dt) {
       targetLift = 1;                                    // …yet the disc lifts
       break;
     case 'failureToOpen':
-      sim.linePressure = Math.min(12.0, sim.linePressure + 0.04 * dt);   // keeps rising, nothing relieves it
+      sim.linePressure = Math.min(set + 2.0, sim.linePressure + 0.04 * dt);   // keeps rising (capped at set + 2 bar), nothing relieves it
       targetLift = 0;
       break;
     case 'chattering': {

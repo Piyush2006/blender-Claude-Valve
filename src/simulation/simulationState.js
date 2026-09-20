@@ -7,7 +7,7 @@
 /** Default anomaly-simulation parameters per component (RESET restores these). */
 export const DEFAULT_SIMS = {
   esdValve: () => ({ anomaly: 'normal', shutdownTime: 6, acceptableTime: 3, partialOpen: 30, airPressure: 5.5, minAirPressure: 4.0, tripElapsed: 0, tripping: false, lastTripDuration: 0, velocity: 0 }),
-  ballValve: () => ({ anomaly: 'normal', operationTime: 12, acceptableTime: 5, leakage: 230, moveElapsed: 0, moving: false, lastMoveDuration: 0 }),
+  ballValve: () => ({ anomaly: 'normal', operationTime: 12, acceptableTime: 5, leakage: 230, moveElapsed: 0, moving: false, lastMoveDuration: 0, lastCloseDuration: 0, lastOpenDuration: 0 }),
   safetyValve: () => ({ anomaly: 'normal', linePressure: 8.5, valveOpen: false, openCount: 0, openings: [], reliefCapacity: 1300 }),
   steamTrap: () => ({ anomaly: 'normal', inletTemp: 172, outletTemp: 98, pressure: 7.0 }),
   checkValve: () => ({ anomaly: 'normal', upstreamPressure: 1.5, downstreamPressure: 1.0, direction: 1 }),
@@ -84,6 +84,7 @@ export const simulationState = {
     status: 'NORMAL',
   },
   paper: {
+    moisture: 4.2,       // % after the Yankee (simulated; computed by the engine from steam flow)
     available: false,    // set by the animator once the Paper_Web mesh is confirmed
     speedMpm: 0,         // m/min, derived from Yankee speed
     travel: 0,           // metres travelled (for texture scrolling)
@@ -104,6 +105,8 @@ export const simulationState = {
     temperature: 165,
     direction: 1,        // +1 forward to return, −1 reverse
   },
+  anomalies: [],           // every component whose detector is DETECTING / WARNING / ANOMALY (see anomalyEngine.js)
+  demo: { phase: 'idle', t: 0 },   // boot demo scenario (ball valve stroke test), see demoScenario.js
   anomaly: {
     active: false,
     status: 'NORMAL',          // NORMAL | DETECTING | ANOMALY
@@ -141,6 +144,7 @@ export function notify() {
 
 export function setBallValveCommand(open) {
   simulationState.ballValve.command = open ? 100 : 0;
+  if (simulationState.demo) simulationState.demo.phase = 'done';   // operator took over from the boot demo stroke test
   notify();
 }
 
@@ -200,7 +204,9 @@ function resetAllComponentSims() {
  */
 export function setAnomalyScenario(component, anomaly = 'normal') {
   const st = simulationState;
+  const operatorCommand = st.vPortValve.commandPosition;   // operating set point from the Controls tab is kept
   resetAllComponentSims();
+  if (st.demo) st.demo.phase = 'done';                     // the Anomaly Simulation panel takes over from the boot demo
   st.anomalySim.component = component;
   st.anomalySim.anomaly = anomaly;
   if (component === 'vPortValve') {
@@ -208,12 +214,28 @@ export function setAnomalyScenario(component, anomaly = 'normal') {
   } else {
     resetVPortSimulation('normal');
     if (st[component]?.sim) st[component].sim.anomaly = anomaly;
-    // Scenario presets so the physical effect is visible as soon as it is selected.
-    if (component === 'safetyValve' && anomaly === 'failureToOpen') st.safetyValve.sim.linePressure = 10.4;   // already above set, keeps rising
-    if (component === 'safetyValve' && anomaly === 'pressureRelief') st.safetyValve.sim.linePressure = 9.4;   // overpressure event starts here
+    // Scenario presets (relative to the operator's set pressure) so the effect is visible immediately.
+    const set = st.safetyValve.setPressure;
+    if (component === 'safetyValve' && anomaly === 'failureToOpen') st.safetyValve.sim.linePressure = set + 0.4;   // already above set, keeps rising
+    if (component === 'safetyValve' && anomaly === 'pressureRelief') st.safetyValve.sim.linePressure = set - 0.6;  // overpressure event starts here
     if (component === 'esdValve' && anomaly === 'lowAirPressure') st.esdValve.sim.airPressure = 3.0;
   }
+  st.vPortValve.commandPosition = operatorCommand;
+  st.vPortValve.actualPosition = operatorCommand;
+  st.vPortValve.physicalPosition = operatorCommand;
   Object.assign(st.anomaly, { active: false, status: 'NORMAL', type: null, persistenceTime: 0, detail: '', component: null, severity: 'anomaly' });
+  notify();
+}
+
+/**
+ * Set ONE component's simulated anomaly without touching the others (used by the
+ * boot demo scenario, which needs two anomalies at once). The Anomaly Simulation
+ * panel keeps using setAnomalyScenario (one scenario at a time).
+ */
+export function setComponentAnomaly(component, anomaly = 'normal') {
+  const st = simulationState;
+  if (component === 'vPortValve') { st.vPortValve.mode = anomaly; }
+  else if (st[component]?.sim) { st[component].sim = DEFAULT_SIMS[component](); st[component].sim.anomaly = anomaly; }
   notify();
 }
 
@@ -267,6 +289,14 @@ export function setDebugVisible(enabled) {
 
 function clampPercent(v) {
   return Math.max(0, Math.min(100, Number(v) || 0));
+}
+
+/** Operating setting: safety / relief valve set pressure (bar). Used by the PSV anomaly models. */
+export function setSafetyValveSetPressure(bar) {
+  const v = Number(bar);
+  if (!Number.isFinite(v)) return;
+  simulationState.safetyValve.setPressure = Math.max(5, Math.min(20, Math.round(v * 10) / 10));
+  notify();
 }
 
 export function setYankeeRunning(running) {

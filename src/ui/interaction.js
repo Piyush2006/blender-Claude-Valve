@@ -3,6 +3,7 @@ import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { simulationState as S, setSelection, subscribe } from '../simulation/simulationState.js';
 import { worldBox } from '../scene/modelMap.js';
 import { anomalyShortName } from './detection.js';
+import { ballStateText, esdStateText } from '../simulation/anomalyEngine.js';
 
 /**
  * Click-to-select with highlight, plus a small floating status tag above every
@@ -164,11 +165,11 @@ export function createInteraction({ renderer, camera, scene, map, cameraRig, ext
   });
 
   function liveValue(id, s) {
-    const st = s[map.components[id]?.def.stateKey]?.status;
-    if ((st === 'ANOMALY' || st === 'WARNING') && s.anomaly.component === id) return anomalyShortName(s.anomaly.type);
+    const own = (s.anomalies || []).find((x) => x.component === id && x.active);   // this component's own anomaly
+    if (own) return anomalyShortName(own.type);
     switch (id) {
-      case 'ballValve': return s.ballValve.position >= 99.5 ? 'OPEN' : s.ballValve.position <= 0.5 ? 'CLOSED' : `${Math.round(s.ballValve.position)}%`;
-      case 'esdValve': return s.esdValve.position >= 99.5 ? 'OPEN' : s.esdValve.position <= 0.5 ? 'CLOSED' : `${Math.round(s.esdValve.position)}%`;
+      case 'ballValve': return ballStateText();
+      case 'esdValve': return esdStateText().replace(/ · .*$/, '');
       case 'vPortValve': return `${Math.round(s.vPortValve.actualPosition)}%`;
       case 'yankee': return `${s.yankee.speedRpm.toFixed(1)} rpm`;
       case 'checkValve': return s.condensate.direction < 0 ? 'REVERSE' : s.checkValve.lift > 0.05 ? 'FLOW' : 'SEATED';

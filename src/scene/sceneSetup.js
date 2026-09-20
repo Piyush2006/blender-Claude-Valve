@@ -94,15 +94,40 @@ export function createScene(container) {
     const dt = Math.min(clock.getDelta(), 0.1); // clamp for tab switches
     for (const fn of frameCallbacks) fn(dt);
     if (!renderEnabled) return;                 // view hidden: keep simulating, skip drawing
-    controls.update();
-    renderer.render(scene, camera);
-    labelRenderer.render(scene, camera);
+    drawFrame();
   }
 
   /** Enable/disable drawing (used when switching between the Twin and Dashboard tabs). */
   function setRenderEnabled(enabled) {
     renderEnabled = !!enabled;
-    if (renderEnabled && container.clientWidth > 0) resize();
+    if (renderEnabled && container.clientWidth > 0) {
+      resize();
+      drawFrame();                                // draw synchronously so the view never shows an empty (black) canvas
+    }
+  }
+
+  function drawFrame() {
+    controls.update();
+    renderer.render(scene, camera);
+    labelRenderer.render(scene, camera);
+  }
+
+  /**
+   * Warm-up: compile every shader and draw one frame even while the Twin view is hidden
+   * (the app may start on the Dashboard). Without this the first switch to the Twin shows
+   * a black canvas for as long as the shader compilation takes.
+   */
+  function warmUp() {
+    const hidden = container.clientWidth === 0;
+    if (hidden) {
+      const w = window.innerWidth || 1280, h = Math.max(200, (window.innerHeight || 800) - 48);
+      camera.aspect = w / h; camera.updateProjectionMatrix();
+      renderer.setSize(w, h, false);
+    } else {
+      resize();
+    }
+    renderer.compile(scene, camera);
+    drawFrame();
   }
 
   function resize() {
@@ -125,5 +150,5 @@ export function createScene(container) {
     labelRenderer.domElement.remove();
   }
 
-  return { renderer, labelRenderer, scene, camera, controls, onFrame, start: loop, resize, dispose, setRenderEnabled };
+  return { renderer, labelRenderer, scene, camera, controls, onFrame, start: loop, resize, dispose, setRenderEnabled, warmUp };
 }

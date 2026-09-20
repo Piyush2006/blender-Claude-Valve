@@ -9,20 +9,17 @@
     <div id="app">
       <header id="topbar">
         <div class="brand">
-          <span class="brand-mark" aria-hidden="true"></span>
-          <div>
-            <div class="brand-title">Yankee Dryer Steam System</div>
-            <div class="brand-sub">Pulp &amp; Paper Mill&nbsp;&nbsp;|&nbsp;&nbsp;Digital Twin &amp; Predictive Monitoring</div>
-          </div>
+          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 21V9l5 3V9l5 3V9l5 3V4h3v17H3zm3-2h2v-3H6v3zm5 0h2v-3h-2v3zm5 0h2v-3h-2v3z"/></svg></span>
+          <span class="brand-mill">Pulp &amp; Paper Mill</span>
+          <span class="brand-div" aria-hidden="true"></span>
+          <span class="brand-app">Yankee Dryer Digital Twin</span>
         </div>
         <nav class="tabs" role="tablist">
-          <button class="tab is-active" data-view="twin" role="tab" aria-selected="true">Twin</button>
-          <button class="tab" data-view="dashboard" role="tab" aria-selected="false">Dashboard</button>
+          <button class="tab" data-nav="twin" role="tab">Twin</button>
+          <button class="tab" data-nav="dashboard" role="tab">Dashboard</button>
         </nav>
         <div class="topbar-right">
-          <span class="online"><span class="dot"></span>System Online</span>
-          <span class="clock"><b id="clock-date"></b><small id="clock-time"></small></span>
-          <button class="settings-btn" type="button" title="Settings">Settings</button>
+          <span class="online"><span class="dot"></span><span>System Online</span></span>
         </div>
       </header>
 
@@ -43,6 +40,7 @@
         </section>
 
         <section id="dashboard-view" data-view="dashboard" hidden></section>
+        <section id="maintenance-view" data-view="maintenance" hidden></section>
       </div>
 
       <div id="loading">

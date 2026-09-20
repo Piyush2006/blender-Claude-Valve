@@ -1,5 +1,6 @@
 import './ui/styles.css';
 import './dashboard/dashboard.css';
+import './maintenance/maintenance.css';
 import { createScene } from './scene/sceneSetup.js';
 import { loadModel, applyValveXray, disposeModel } from './scene/sceneLoader.js';
 import { buildModelMap, reportModelMap } from './scene/modelMap.js';
@@ -7,6 +8,7 @@ import { createCameraRig } from './scene/cameraViews.js';
 import { applyLayoutOverrides } from './scene/layoutOverrides.js';
 import { addProceduralEquipment } from './scene/proceduralEquipment.js';
 import { simulationState, notify } from './simulation/simulationState.js';
+import { loadDemoScenario } from './simulation/demoScenario.js';
 import { tickSimulation } from './simulation/simulationEngine.js';
 import { createValveController } from './animation/valveController.js';
 import { createYankeeAnimator } from './animation/yankeeAnimator.js';
@@ -19,6 +21,8 @@ import { makeCollapsible } from './ui/panels.js';
 import { createNavigation } from './ui/navigation.js';
 import { createFlowTags } from './ui/flowTags.js';
 import { createDashboard } from './dashboard/dashboard.js';
+import { createMaintenanceUI } from './maintenance/maintenanceUI.js';
+import { createMaintenanceView } from './maintenance/maintenanceView.js';
 import { setSelection } from './simulation/simulationState.js';
 
 async function bootstrap() {
@@ -61,7 +65,7 @@ async function bootstrap() {
   // --- UI ---------------------------------------------------------------------------------
   const interaction = createInteraction({ renderer: ctx.renderer, camera: ctx.camera, scene: ctx.scene, map, cameraRig, extraPickables: layout.vent ? [layout.vent] : [] });
   const flowTags = createFlowTags({ scene: ctx.scene, map });
-  createControlPanel(document.getElementById('controls'), {
+  const controlPanel = createControlPanel(document.getElementById('controls'), {
     cameraRig,
     onValveXray: (enabled) => applyValveXray(root, enabled),
   });
@@ -70,18 +74,31 @@ async function bootstrap() {
   makeCollapsible(document.getElementById('controls'), { key: 'controls' });
   makeCollapsible(document.getElementById('status'), { key: 'status', showAlarmBadge: true });
 
-  // --- Twin / Dashboard tabs. The Dashboard only reads simulationState. -------------------
+  // --- Twin / Dashboard / Reports navigation. The Dashboard only reads simulationState. ------
+  let dashboard = null;
   const navigation = createNavigation({
     onViewChange: (view) => ctx.setRenderEnabled(view === 'twin'),
-  });
-  createDashboard(document.getElementById('dashboard-view'), {
-    onOpenComponent: (id) => {
-      navigation.showView('twin');
-      if (map.components[id]) {
-        setSelection(id);
-        requestAnimationFrame(() => interaction.focusSelected());
-      }
+    onNav: (nav) => {
+      if (nav === 'controls') controlPanel.showTab?.('controls');
+      if (nav === 'analytics') dashboard?.openAnalytics();
     },
+  });
+  const openComponent = (id) => {
+    navigation.showView('twin');
+    if (map.components[id]) {
+      setSelection(id);
+      requestAnimationFrame(() => interaction.focusSelected());
+    }
+  };
+  // --- Maintenance: anomaly details drawer, tickets, MAINTENANCE view (reads the same state) ---
+  const maintenance = createMaintenanceUI({ onOpenComponent: openComponent });
+  createMaintenanceView(document.getElementById('maintenance-view'), { onOpenTicket: (id) => maintenance.openTicket(id), onBack: () => navigation.go('dashboard') });
+
+  dashboard = createDashboard(document.getElementById('dashboard-view'), {
+    onOpenComponent: openComponent,
+    onCreateTicket: (componentId) => maintenance.openCreateTicket(componentId),
+    onOpenTicket: (id) => maintenance.openTicket(id),
+    onOpenReports: () => navigation.go('reports'),
   });
 
   // --- Frame loop: simulation → animation ---------------------------------------------
@@ -92,12 +109,17 @@ async function bootstrap() {
     steam.update();
   });
 
+  // Boot demo scenario: V-Port position mismatch (70 % / 32 %) + ball valve slow response (stroke test).
+  loadDemoScenario();
   notify();
+  valves.update(); yankee.update(); steam.update();
+  ctx.warmUp();                                 // compile shaders + first frame, even if the Twin view is hidden
   loading.hidden = true;
   ctx.start();
 
   // Debug / test hooks (not used by the app itself).
   window.__twin = {
+    maintenance,
     state: simulationState, map, ctx, cameraRig, steam, yankee, valves, navigation,
     /** Advance the simulation deterministically (used by automated checks). */
     step(dt = 0.1, n = 1) {

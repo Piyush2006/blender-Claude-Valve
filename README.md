@@ -35,11 +35,18 @@ src/
   ui/interaction.js                click-to-select, blue selection / red anomaly tint, floating 3D status tags
   ui/detection.js                  shared detection text / reasoning formatting
   ui/panels.js                     collapsible side panels (state remembered in localStorage)
-  ui/navigation.js                 top bar: Twin / Dashboard tabs + live local clock
+  ui/navigation.js                 top bar: Twin / Dashboard tabs
+  simulation/demoScenario.js       boot demo: V-Port position mismatch + ball valve slow-response stroke test
   dashboard/dashboardData.js       dashboard data layer: derives everything from simulationState (+ simulated extras)
-  dashboard/dashboard.js           dashboard view (KPIs, schematic, V-Port card, trends, tables, insights)
-  dashboard/schematic.js           lightweight SVG process schematic (click → Twin selection)
-  dashboard/charts.js              dependency-free SVG sparklines / trend charts / bars
+  dashboard/dashboard.js           dashboard view (status strip, process flow, component table, anomalies, detail, activity)
+  dashboard/anomalyAnalytics.js    per-anomaly overview metrics, historical comparison, recent activity (simulated historian)
+  dashboard/anomalyCharts.js       SVG charts: command vs actual position, ball open/close response, flow vs expected
+  dashboard/liveHistory.js         live sample buffers (V-Port position/flow, ball valve stroke in simulation time)
+  dashboard/schematic.js           lightweight SVG process schematic (selection frame, live labels, click → select)
+  maintenance/ticketStore.js       tickets: capture from simulationState, OPEN→ASSIGNED→IN PROGRESS→RESOLVED→CLOSED, e-mail sim
+  maintenance/maintenanceUI.js     ticket drawer + create / assign / resolve modals + simulated e-mail preview
+  maintenance/maintenanceView.js   ticket list ("All maintenance tickets" from the detail menu)
+  maintenance/knowledge.js         possible causes / recommendations / root-cause options per anomaly type
 ```
 
 ## GLB inspection summary
@@ -125,29 +132,62 @@ attention) and `levelOfDeviation()`; System Status is the worst component level.
 
 ## Dashboard tab
 
-`[Twin] [Dashboard]` in the top bar. The Dashboard is monitoring-only and reads the **same
-`simulationState`** as the Twin through `dashboardData.snapshot()` — no second copy of any
-value. Units are the Twin's (bar, kg/h, °C) via `units.js`.
+`[Twin] [Dashboard]` in the top bar. The Dashboard follows MONITOR → IDENTIFY ANOMALY →
+ANALYZE → TAKE ACTION and reads the **same `simulationState`** as the Twin through
+`dashboardData.snapshot()` — no second copy of any value. Units are the Twin's (bar, kg/h, °C,
+rpm) via `units.js`. There are no generic KPI cards.
 
-* KPIs: system status, steam pressure, steam flow (with command-based target and deviation %),
-  steam temperature, paper moisture (target), active-anomaly count.
-* Process Overview: SVG schematic of the full line (supply → ball → ESD → V-Port → PSV branch →
-  rotary joint → Yankee → separator → trap → check valve → return; blow-through → steam return)
-  with live status dots. Clicking a component opens the Twin with it selected.
-* V-Port card: command vs actual bars, position error, **expected (at actual position) vs actual
-  flow bars with deviation %**, trim health (from the Twin's trim-wear scenario) with an
-  *Estimated Maintenance Window* and Early Warning badge.
-* Trends: last 10 min of real time sampled every 2 s (backfilled at the same spacing, so no
-  artificial cliff); anomaly / scenario events are drawn as markers to explain changes.
-* Component Status table with technically meaningful parameters (PSV set pressure, rotary-joint
-  seal temperature, steam-trap inlet/outlet ΔT, check valve open/closed + flow note).
-* Active anomalies from the shared anomaly state for every component (Trim Wear shows as 🟡
-  attention with expected/actual flow, deviation, trim health, maintenance window); recent
-  events (real timestamps) and insights. Isolation valves show OPEN/CLOSED/CLOSING, PSV set vs
-  current pressure + relief flow, steam trap temperatures + condition, check valve direction.
-* Simulated-only values (paper moisture, trend backfill, event log) are isolated in the `SIM`
-  helpers of `dashboardData.js` so they can be replaced by PLC / historian data.
-* While the Dashboard is shown the Twin keeps simulating; only WebGL drawing is paused.
+* Status strip: `N Critical · N Attention · Open Tickets: N` and the live local date/time.
+* Process Flow: flat 2D schematic (red steam, blue condensate) with a status dot + short state
+  per component, the selected component framed in blue (red tint when critical), and the
+  relevant live values (steam flow with deviation vs command, paper moisture vs target,
+  condensate return temperature). Clicking a symbol selects the component.
+* Component Status: a plain table (no graphics) — Component / Status / Key Parameter-State.
+  Isolation valves use discrete states (Open, Closing, Closed, Closing Slowly, Fail to Close…),
+  the V-Port shows `70% cmd / 32% act`, the safety valve Closed/Open, the check valve Forward/Reverse.
+* Active Anomalies: one compact card per flagged component (several can be active at once —
+  see *Concurrent anomalies* below) with anomaly-specific columns and a **VIEW** button that
+  selects it in the detail panel below (the dashboard never navigates away).
+* Selected anomaly detail: header (component — anomaly, CRITICAL / WARNING, subtitle, first
+  detected, duration, **View in Twin**, **Create Ticket**, ⋯ menu) and tabs Overview /
+  Analytics / Possible Causes / Recommendations / Activity.
+  * V-Port position mismatch: commanded, actual, position error, steam flow (▼ % vs command),
+    expected at command, expected at actual (✓ matches); *Command vs Actual Position* chart
+    (blue command, green actual, red-shaded gap) with a range selector; *Position Error —
+    Historical* (today live; yesterday / 7-day simulated) with a trend.
+  * Ball valve slow response: command, actual, response time, expected (< acceptable),
+    response deviation, current valve state — never a percentage; *Ball Valve Open/Close
+    Response* chart (command step first, actual lags, amber lag shading, "expected < 2 s"
+    marker); *Closing Response Time* today / yesterday / 7-day / normal with a trend.
+  * Other anomalies fall back to their evidence lines, a flow-vs-expected chart and a generic
+    comparison, so all 23 catalogue anomalies work.
+* Recent Activity: 7-day squares, occurrence count and trend, then the live detections (real
+  timestamps) merged with a clearly simulated prior history for the selected component.
+* Ticketing is part of the Dashboard: **Create Ticket** opens a modal pre-filled from the
+  selected anomaly (issue, component, anomaly, severity, priority P1 for critical / P2 for
+  warning, assignee, due date, generated description, e-mail notification) → `MT-1024…` →
+  confirmation with status OPEN and a simulated e-mail preview. The ticket drawer runs the
+  workflow OPEN → ASSIGN → START WORK → (repair in the Twin) → MARK RESOLVED (root cause,
+  corrective action, notes) → verify 🟢 NORMAL → CLOSE, with a full activity log. Tickets are
+  local application state (localStorage); "All maintenance tickets" (⋯ menu) lists them.
+* Simulated-only values (moisture model, yesterday / 7-day baselines, prior activity entries)
+  are isolated in `dashboardData.js` / `anomalyAnalytics.js` so they can be replaced by PLC /
+  historian data. While the Dashboard is shown the Twin keeps simulating; only WebGL drawing is paused.
+
+### Concurrent anomalies & boot demo
+
+`anomalyEngine.tickAnomalies` runs the detector of **every** component (V-Port `mode`, others
+`sim.anomaly`) with its own persistence timer and publishes `simulationState.anomalies[]`
+(component, type, status, detail, detectedAt). `simulationState.anomaly` stays the *primary*
+anomaly (the one driven by the Anomaly Simulation panel, else the worst active one), so the Twin
+panels behave exactly as before; the Anomaly Simulation tab still runs one scenario at a time.
+
+`demoScenario.js` loads the demo at start-up: V-Port position mismatch (70 % commanded /
+32 % actual, CRITICAL) plus a ball valve **stroke test** with a slow actuator — CLOSE command,
+8.5 s to reach CLOSED (expected < 2 s), held closed, then re-opened so steam returns to the
+Yankee; the slow-response verdict stays latched (WARNING) and the dashboard reports the closing
+stroke (CLOSE → CLOSED, 8.5 s). Any operator action on the ball valve or the Anomaly Simulation
+panel takes over from the sequencer.
 
 ## Anomaly Simulation (all components)
 
@@ -178,7 +218,7 @@ the 2 s persistence timer; catalog severity decides ANOMALY (red) vs WARNING (am
 | Check valve | Failure to Open | forward ΔP, disc stuck seated, no flow | ΔP > 0 & seated |
 | Check valve | Failure to Close | reverse ΔP, disc stuck open, full reverse flow | ΔP < 0 & open |
 
-Units in the Twin panel stay metric (kg/h, bar, °C) as before; the Dashboard converts.
+Units in the Twin panel stay metric (kg/h, bar, °C) as before; the Dashboard uses the same units.
 
 **Safety-valve venting steam.** `safetyValve.reliefFlow` (kg/h) is the single relief variable:
 it is shown in the panel / info card / dashboard and drives a dedicated steam volume inside the

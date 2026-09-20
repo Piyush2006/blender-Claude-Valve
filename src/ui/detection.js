@@ -1,4 +1,5 @@
 import { anomalyByType, ANOMALY_CATALOG } from '../simulation/anomalyCatalog.js';
+import { anomalyRecord, simulatedAnomalyOf } from '../simulation/anomalyEngine.js';
 
 /** Shared formatting for anomaly detection state (all components / scenarios). */
 
@@ -24,20 +25,27 @@ export function detectionText(s) {
   }
 }
 
-/** Multi-line, transparent explanation of the active detection rule (info card). */
+/**
+ * Multi-line, transparent explanation of the detection rule for ONE component
+ * (info card). Uses the component's own simulated anomaly and detection record,
+ * so it stays correct when several anomalies are active at once.
+ */
 export function detectionReasonHtml(s, componentId) {
-  const v = s.vPortValve, a = s.anomaly, sim = s.anomalySim;
+  const v = s.vPortValve;
   const lines = [];
   const rule = (txt) => lines.push(`<div class="mono">${txt}</div>`);
-  const flagged = sim.component === componentId;
-  const scenario = ANOMALY_CATALOG[sim.component]?.anomalies.find((x) => x.id === sim.anomaly);
+  const anomalyId = simulatedAnomalyOf(componentId);
+  const rec = anomalyRecord(componentId);
+  const scenario = ANOMALY_CATALOG[componentId]?.anomalies.find((x) => x.id === anomalyId);
+  // Per-component view of the shared detection fields (threshold / persistence are global settings).
+  const a = rec ? { ...rec, threshold: s.anomaly.threshold, persistenceRequired: s.anomaly.persistenceRequired } : null;
 
-  if (!flagged) {
+  if (!a || (anomalyId === 'normal' && componentId !== 'vPortValve')) {
     return `<div class="detect-title">Detection</div><div class="muted">No anomaly simulated on this component</div>`;
   }
   rule(`Scenario: ${scenario?.label || 'Normal'}`);
 
-  if (sim.component === 'vPortValve') {
+  if (componentId === 'vPortValve') {
     const c = Math.round(v.commandPosition), act = Math.round(v.actualPosition), e = Math.round(v.positionError);
     switch (v.mode) {
       case 'sticking':

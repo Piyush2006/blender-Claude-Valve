@@ -42,17 +42,23 @@ export function makeCollapsible(panel, { key, showAlarmBadge = false }) {
 
   if (showAlarmBadge) {
     subscribe((s) => {
-      let anomalies = 0, detecting = 0;
+      // Counts every component's own detection record (several anomalies can be active at once).
+      let anomalies = 0, warnings = 0, detecting = 0;
       for (const c of COMPONENTS) {
         const st = s[c.stateKey]?.status;
         if (st === 'ANOMALY') anomalies++;
-        else if (st === 'DETECTING' || st === 'WARNING') detecting++;
+        else if (st === 'WARNING') warnings++;
+        else if (st === 'DETECTING') detecting++;
       }
-      const text = anomalies ? `${anomalies} ANOMALY` : detecting ? (s.anomaly.status === 'WARNING' ? 'WARNING' : 'DETECTING') : '';
+      const parts = [];
+      if (anomalies) parts.push(`${anomalies} ANOMALY`);
+      if (warnings) parts.push(`${warnings} WARNING`);
+      if (!parts.length && detecting) parts.push('DETECTING');
+      const text = parts.join(' · ');
       if (badge.textContent !== text) badge.textContent = text;
       badge.hidden = !text;
       badge.classList.toggle('is-anomaly', anomalies > 0);
-      badge.classList.toggle('is-detecting', !anomalies && detecting > 0);
+      badge.classList.toggle('is-detecting', !anomalies && (warnings > 0 || detecting > 0));
     });
   }
 }

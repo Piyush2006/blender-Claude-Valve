@@ -62,24 +62,35 @@ export function createSchematic(container, { onSelect }) {
     drawSymbol(g, n, y);
     const labelY = n.kind === 'psv' ? 30
       : y === COND_Y ? COND_Y + 30
-      : n.actuator ? STEAM_Y - 72
-      : n.kind === 'yankee' ? STEAM_Y - 62
+      : n.actuator ? (n.big ? STEAM_Y - 80 : STEAM_Y - 72)
+      : n.kind === 'yankee' ? STEAM_Y - 74
       : n.kind === 'joint' ? STEAM_Y - 34
       : STEAM_Y - 48;
     g.appendChild(el('text', { class: 'sch-name', x: n.x, y: labelY, 'text-anchor': 'middle' }, n.label));
     const dot = el('circle', { class: 'sch-dot', cx: n.x - 24, cy: labelY + 14, r: 4.5 });
     const st = el('text', { class: 'sch-status', x: n.x - 16, y: labelY + 18 }, '');
+    // selection frame (shown for the component selected on the dashboard)
+    const top = Math.min(labelY - 14, n.kind === 'psv' ? 30 : y - 50), bottom = n.kind === 'yankee' ? y + 50 : n.kind === 'tank' ? y + 40 : y + 22;
+    const half = n.kind === 'yankee' ? 62 : n.big ? 68 : 46;
+    const sel = el('rect', { class: 'sch-select', x: n.x - half, y: top, width: half * 2, height: bottom - top, rx: 8 });
+    g.insertBefore(sel, g.firstChild);
     g.append(dot, st);
     g.addEventListener('click', () => onSelect?.(n.id));
     g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect?.(n.id); } });
     svg.appendChild(g);
     nodeEls.set(n.id, { g, dot, st });
   }
+  // Live process values (same state as the Twin), kept small so the diagram stays readable.
+  svg.appendChild(el('text', { class: 'sch-label bold', x: 392, y: STEAM_Y + 36, id: 'sch-flow-l' }, 'Steam Flow'));
+  svg.appendChild(el('text', { class: 'sch-label mono', x: 392, y: STEAM_Y + 50, id: 'sch-flow' }, ''));
+  svg.appendChild(el('text', { class: 'sch-label bold', x: 588, y: STEAM_Y + 78, id: 'sch-moist-l' }, 'Moisture'));
+  svg.appendChild(el('text', { class: 'sch-label mono', x: 588, y: STEAM_Y + 92, id: 'sch-moist' }, ''));
+  svg.appendChild(el('text', { class: 'sch-label mono', x: 975, y: COND_Y + 17, 'text-anchor': 'end', id: 'sch-cond-temp' }, ''));
   container.appendChild(svg);
 
   return {
     /** statuses: { id → { level: 'normal'|'attention'|'critical', text } } ; supply: string */
-    update(statuses, supplyText, reverseCondensate = false) {
+    update(statuses, supplyText, reverseCondensate = false, { selectedId = null, live = null } = {}) {
       const ar = svg.querySelector('#sch-cond-arrow');
       ar.setAttribute('transform', reverseCondensate ? `translate(${968 * 2 - 18},0) scale(-1,1)` : '');
       ar.classList.toggle('is-reverse', reverseCondensate);
@@ -90,8 +101,14 @@ export function createSchematic(container, { onSelect }) {
         g.dataset.level = s.level;
         dot.setAttribute('class', `sch-dot is-${s.level}`);
         st.textContent = s.text;
+        g.classList.toggle('is-selected', id === selectedId);
       }
       svg.querySelector('#sch-supply').textContent = supplyText;
+      if (live) {
+        const f = svg.querySelector('#sch-flow'); f.textContent = live.flow; f.setAttribute('class', `sch-label mono ${live.flowTone ? `tone-${live.flowTone}` : ''}`);
+        const m = svg.querySelector('#sch-moist'); m.textContent = `${live.moisture} · ${live.moistureTarget}`; m.setAttribute('class', `sch-label mono ${live.moistureTone ? `tone-${live.moistureTone}` : ''}`);
+        svg.querySelector('#sch-cond-temp').textContent = live.condensateTemp;
+      }
     },
   };
 }

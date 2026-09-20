@@ -1,15 +1,18 @@
 import { simulationState as S } from './simulationState.js';
-import { anomalyDef } from './anomalyCatalog.js';
+import { anomalyDef, COMPONENT_ORDER } from './anomalyCatalog.js';
 
 /**
  * Anomaly engine.
  *
- * One detector runs for the component + anomaly selected in the Anomaly
- * Simulation panel (simulationState.anomalySim). Every detector answers the
- * same question — "is the abnormal condition present right now?" — and shares
- * the persistence timer: condition true for ≥ persistenceRequired (2 s) →
- * ANOMALY (or WARNING for warning-severity anomalies), true but not yet
- * persisted → DETECTING, false → NORMAL (timer reset).
+ * Every component runs the detector for its own simulated anomaly (V-Port:
+ * `mode`, others: `sim.anomaly`) with its own persistence timer, so several
+ * anomalies can be active at once (simulationState.anomalies). Each detector
+ * answers the same question — "is the abnormal condition present right now?":
+ * condition true for ≥ persistenceRequired (2 s) → ANOMALY (or WARNING for
+ * warning-severity anomalies), true but not yet persisted → DETECTING, false →
+ * NORMAL (timer reset). simulationState.anomaly stays the PRIMARY anomaly (the
+ * one driven by the Anomaly Simulation panel, else the worst active one) so the
+ * Twin panels behave exactly as before.
  *
  * V-Port (unchanged from the original implementation):
  *   normal / positionMismatch : |commanded − actual| > 10 %
@@ -37,7 +40,7 @@ export const ANOMALY_LABELS = {
   ESD_LOW_AIR: 'ESD Low Pneumatic Air Pressure',
   BALL_FAIL_TO_OPEN: 'Ball Valve Fail to Open',
   BALL_FAIL_TO_CLOSE: 'Ball Valve Fail to Close',
-  BALL_SLOW_OPERATION: 'Ball Valve Slow Operation',
+  BALL_SLOW_OPERATION: 'Ball Valve Slow Response',
   BALL_PASSING: 'Ball Valve Passing / Leakage',
   PSV_UNEXPECTED_OPENING: 'Safety Valve Unexpected Opening',
   PSV_FAILURE_TO_OPEN: 'Safety Valve Failure to Open',
@@ -67,55 +70,91 @@ const STATUS_KEYS = ['ballValve', 'esdValve', 'vPortValve', 'safetyValve', 'stea
 // Sliding window of (t, actual − command) samples for the hunting detector.
 const huntingSamples = [];
 
+// Per-component detection records (persistence timer + last verdict).
+const records = {};
+for (const c of COMPONENT_ORDER) records[c] = { persistenceTime: 0, status: 'NORMAL', type: null, detail: '', severity: 'anomaly', detectedAt: null };
+const RANK = { NORMAL: 0, DETECTING: 1, WARNING: 2, ANOMALY: 3 };
+
+/** Anomaly id currently simulated on a component (V-Port uses `mode`). */
+export function simulatedAnomalyOf(component) {
+  return component === 'vPortValve' ? S.vPortValve.mode : (S[component]?.sim?.anomaly || 'normal');
+}
+
 export function tickAnomalies(dt) {
   const a = S.anomaly;
-  const { component, anomaly } = S.anomalySim;
-  const def = anomalyDef(component, anomaly);
   const v = S.vPortValve;
   v.positionError = Math.abs(v.commandPosition - v.actualPosition);
 
-  let r;
-  switch (component) {
-    case 'esdValve': r = detectEsd(anomaly); break;
-    case 'ballValve': r = detectBall(anomaly); break;
-    case 'safetyValve': r = detectSafetyValve(anomaly); break;
-    case 'steamTrap': r = detectSteamTrap(anomaly); break;
-    case 'checkValve': r = detectCheckValve(anomaly); break;
-    default: r = detectVPort(v.mode); break;
+  const list = [];
+  for (const component of COMPONENT_ORDER) {
+    const anomaly = simulatedAnomalyOf(component);
+    const def = anomalyDef(component, anomaly);
+    let r;
+    switch (component) {
+      case 'esdValve': r = detectEsd(anomaly); break;
+      case 'ballValve': r = detectBall(anomaly); break;
+      case 'safetyValve': r = detectSafetyValve(anomaly); break;
+      case 'steamTrap': r = detectSteamTrap(anomaly); break;
+      case 'checkValve': r = detectCheckValve(anomaly); break;
+      default: r = detectVPort(v.mode); break;
+    }
+    const rec = records[component];
+    const severity = def?.severity || 'anomaly';
+    if (r.condition) {
+      rec.persistenceTime = Math.min(rec.persistenceTime + dt, a.persistenceRequired);
+      rec.type = r.type;
+      rec.severity = severity;
+      const flagged = rec.persistenceTime >= a.persistenceRequired;
+      rec.status = flagged ? (severity === 'warning' ? 'WARNING' : 'ANOMALY') : 'DETECTING';
+      if (flagged && !rec.detectedAt) rec.detectedAt = Date.now();
+      if (!flagged) rec.detectedAt = null;
+    } else {
+      rec.persistenceTime = 0; rec.status = 'NORMAL'; rec.type = null; rec.severity = 'anomaly'; rec.detectedAt = null;
+    }
+    rec.detail = r.detail;
+    if (rec.status !== 'NORMAL') list.push({ component, type: rec.type, status: rec.status, severity: rec.severity, detail: rec.detail, detectedAt: rec.detectedAt, active: rec.status !== 'DETECTING' });
   }
   if (v.mode !== 'hunting') huntingSamples.length = 0;
+  list.sort((x, y) => RANK[y.status] - RANK[x.status]);
+  S.anomalies = list;
 
-  const severity = def?.severity || 'anomaly';
-  if (r.condition) {
-    a.persistenceTime = Math.min(a.persistenceTime + dt, a.persistenceRequired);
-    a.type = r.type;
-    a.component = component;
-    a.severity = severity;
-    if (a.persistenceTime >= a.persistenceRequired) {
-      a.status = severity === 'warning' ? 'WARNING' : 'ANOMALY';
-      a.active = true;
-    } else {
-      a.status = 'DETECTING';
-      a.active = false;
-    }
+  // Primary anomaly: the component driven by the Anomaly Simulation panel, else the worst active one.
+  const driven = records[S.anomalySim.component];
+  const primaryComponent = driven && driven.status !== 'NORMAL' ? S.anomalySim.component : (list[0]?.component || null);
+  const primary = primaryComponent ? records[primaryComponent] : null;
+  if (primary && primary.status !== 'NORMAL') {
+    a.persistenceTime = primary.persistenceTime;
+    a.type = primary.type; a.component = primaryComponent; a.severity = primary.severity;
+    a.status = primary.status; a.active = primary.status !== 'DETECTING';
+    a.detail = primary.detail;
   } else {
-    a.persistenceTime = 0;
-    a.status = 'NORMAL';
-    a.active = false;
-    a.type = null;
-    a.component = null;
-    a.severity = 'anomaly';
+    a.persistenceTime = 0; a.status = 'NORMAL'; a.active = false; a.type = null; a.component = null; a.severity = 'anomaly';
+    a.detail = records[S.anomalySim.component]?.detail || '';
   }
-  a.detail = r.detail;
 
-  // Component statuses: only the flagged component carries the detector's status.
+  // Component statuses: each component carries its own detector's status.
   for (const key of STATUS_KEYS) {
     if (!S[key]) continue;
-    const st = key === component ? a.status : 'NORMAL';
+    const st = records[key] ? records[key].status : 'NORMAL';
     if (S[key].status !== st) S[key].status = st;
   }
-  v.anomaly = a.active && component === 'vPortValve' ? { type: a.type, message: ANOMALY_LABELS[a.type] } : null;
+  v.anomaly = records.vPortValve.status === 'ANOMALY' || records.vPortValve.status === 'WARNING' ? { type: records.vPortValve.type, message: ANOMALY_LABELS[records.vPortValve.type] } : null;
 }
+
+/**
+ * Pre-populate a component's detection record so an anomaly that is present at boot
+ * counts as detected at `detectedAt` (persistence already satisfied). The condition
+ * itself is still evaluated by the detector on the next tick.
+ */
+export function presetDetection(component, detectedAt) {
+  const rec = records[component];
+  if (!rec) return;
+  rec.persistenceTime = S.anomaly.persistenceRequired;
+  rec.detectedAt = detectedAt;
+}
+
+/** Detection record of one component (status, type, detail, detectedAt). */
+export function anomalyRecord(component) { return records[component] || null; }
 
 /* ------------------------------------------------------------------------------- */
 /* V-Port (original detectors)                                                       */
@@ -211,10 +250,11 @@ function detectBall(anomaly) {
       return { condition: b.command === 0 && b.position > 90, type: 'BALL_FAIL_TO_CLOSE', detail: `command CLOSE · actual ${ballStateText()}` };
     case 'slowOperation': {
       const tooSlowNow = sim.moving && sim.moveElapsed > sim.acceptableTime;
-      const lastTooSlow = !sim.moving && sim.lastMoveDuration > sim.acceptableTime;
+      const last = Math.max(sim.lastCloseDuration || 0, sim.lastMoveDuration || 0);
+      const lastTooSlow = !sim.moving && last > sim.acceptableTime;
       return { condition: tooSlowNow || lastTooSlow, type: 'BALL_SLOW_OPERATION',
-        detail: sim.moving ? `operating ${sim.moveElapsed.toFixed(1)} s · acceptable ${sim.acceptableTime.toFixed(1)} s`
-          : sim.lastMoveDuration ? `last operation ${sim.lastMoveDuration.toFixed(1)} s · acceptable ${sim.acceptableTime.toFixed(1)} s` : 'idle' };
+        detail: sim.moving ? `${b.command === 0 ? 'closing' : 'opening'} ${sim.moveElapsed.toFixed(1)} s · expected < ${sim.acceptableTime.toFixed(1)} s`
+          : last ? `last ${sim.lastCloseDuration ? 'closing' : 'stroke'} ${last.toFixed(1)} s · expected < ${sim.acceptableTime.toFixed(1)} s` : 'idle' };
     }
     case 'passing':
       return { condition: b.command === 0 && b.position < 0.5 && S.steam.flow > 0, type: 'BALL_PASSING',
@@ -224,11 +264,32 @@ function detectBall(anomaly) {
   }
 }
 
+/** Isolation valve: discrete state only (never a modulating %). */
 export function ballStateText() {
   const b = S.ballValve;
-  if (b.position >= 99.5) return 'OPEN';
-  if (b.position <= 0.5) return 'CLOSED';
-  return `${Math.round(b.position)}% open`;
+  if (b.position >= 99.5) return b.command === 0 && b.sim.anomaly === 'failToClose' ? 'FAIL TO CLOSE' : 'OPEN';
+  if (b.position <= 0.5) return b.command === 100 && b.sim.anomaly === 'failToOpen' ? 'FAIL TO OPEN' : 'CLOSED';
+  return b.command === 0 ? 'CLOSING' : 'OPENING';
+}
+
+/**
+ * The stroke the slow-response verdict refers to: the stroke in progress, else the
+ * last completed one (closing preferred). Discrete states only.
+ */
+export function ballStrokeInfo() {
+  const b = S.ballValve, sim = b.sim;
+  if (sim.moving) return { command: b.command === 0 ? 'CLOSE' : 'OPEN', actual: ballStateText(), responseTime: sim.moveElapsed, inProgress: true };
+  const hasStroke = sim.lastCloseDuration || sim.lastOpenDuration;
+  // The closing stroke is the safety-relevant one: report it whenever it was slow.
+  const closing = hasStroke ? (sim.lastCloseDuration > sim.acceptableTime || sim.lastCloseDuration >= (sim.lastOpenDuration || 0)) : b.command === 0;
+  return { command: closing ? 'CLOSE' : 'OPEN', actual: hasStroke ? (closing ? 'CLOSED' : 'OPEN') : ballStateText(), responseTime: ballResponseTime(), inProgress: false };
+}
+
+/** Response time of the current / last ball valve stroke, s (closing preferred). */
+export function ballResponseTime() {
+  const sim = S.ballValve.sim;
+  if (sim.moving) return sim.moveElapsed;
+  return sim.lastCloseDuration || sim.lastMoveDuration || 0;
 }
 
 /* ------------------------------------------------------------------------------- */

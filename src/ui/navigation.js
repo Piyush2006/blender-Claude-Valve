@@ -1,44 +1,40 @@
 /**
- * Top bar: Twin / Dashboard tabs plus a live clock.
- * Views are plain sections toggled with `hidden`; the Twin keeps running its
- * simulation while hidden, only its WebGL rendering is paused.
+ * Top bar navigation: Twin / Dashboard tabs. The maintenance ticket list
+ * ("reports") has no tab — it is reached from the Dashboard's detail menu.
+ * The Twin keeps running its simulation while hidden, only its WebGL
+ * rendering is paused.
  */
-export function createNavigation({ onViewChange }) {
-  const tabs = [...document.querySelectorAll('#topbar .tab')];
-  const views = [...document.querySelectorAll('#views > [data-view]')];
-  let current = 'twin';
+const NAV_VIEW = { dashboard: 'dashboard', twin: 'twin', controls: 'twin', analytics: 'dashboard', reports: 'maintenance' };
 
-  function showView(name) {
+export function createNavigation({ onViewChange, onNav }) {
+  const tabs = [...document.querySelectorAll('#topbar .tab[data-nav]')];
+  const views = [...document.querySelectorAll('#views > [data-view]')];
+  let current = 'twin', currentNav = 'twin';
+
+  function showView(name, nav = null) {
     if (!views.some((v) => v.dataset.view === name)) return;
     current = name;
+    currentNav = nav || (NAV_VIEW[currentNav] === name ? currentNav : Object.keys(NAV_VIEW).find((k) => NAV_VIEW[k] === name));
     for (const v of views) v.hidden = v.dataset.view !== name;
     for (const t of tabs) {
-      const active = t.dataset.view === name;
+      const active = t.dataset.nav === currentNav;
       t.classList.toggle('is-active', active);
       t.setAttribute('aria-selected', String(active));
     }
-    try { localStorage.setItem('twin.view', name); } catch { /* ignore */ }
+    try { localStorage.setItem('twin.nav', currentNav); } catch { /* ignore */ }
     onViewChange?.(name);
   }
-
-  for (const t of tabs) t.addEventListener('click', () => showView(t.dataset.view));
-
-  // Live clock (browser local time — never a hard-coded demo date).
-  const dateEl = document.getElementById('clock-date');
-  const timeEl = document.getElementById('clock-time');
-  const dateFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-  const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-  function tickClock() {
-    const now = new Date();
-    dateEl.textContent = dateFmt.format(now);
-    timeEl.textContent = `${timeFmt.format(now)} (Local Time)`;
+  function go(nav) {
+    showView(NAV_VIEW[nav] || 'dashboard', nav);
+    onNav?.(nav);
   }
-  tickClock();
-  setInterval(tickClock, 1000);
 
-  let initial = 'twin';
-  try { initial = localStorage.getItem('twin.view') || 'twin'; } catch { /* ignore */ }
-  showView(initial);
+  for (const t of tabs) t.addEventListener('click', () => go(t.dataset.nav));
 
-  return { showView, get current() { return current; } };
+  let initial = 'dashboard';
+  try { initial = localStorage.getItem('twin.nav') || 'dashboard'; } catch { /* ignore */ }
+  if (!NAV_VIEW[initial] || initial === 'reports') initial = 'dashboard';
+  go(initial);
+
+  return { showView, go, get current() { return current; } };
 }

@@ -1,6 +1,7 @@
 import { subscribe, setSelection } from '../simulation/simulationState.js';
 import { COMPONENTS } from '../components/componentRegistry.js';
 import { describeOnOff } from './controlPanel.js';
+import { ballStateText, esdStateText } from '../simulation/anomalyEngine.js';
 
 /** Component status list (right panel). Green = NORMAL, red = anomaly. */
 export function createStatusPanel(container) {
@@ -48,8 +49,8 @@ export function createStatusPanel(container) {
 
 function extraFor(id, s) {
   switch (id) {
-    case 'ballValve': return describeOnOff(s.ballValve.position);
-    case 'esdValve': return s.esdValve.tripped ? (s.esdValve.position <= 0.5 ? 'TRIPPED' : `TRIP · ${Math.round(s.esdValve.position)}%`) : describeOnOff(s.esdValve.position);
+    case 'ballValve': return ballStateText();
+    case 'esdValve': return s.esdValve.tripped ? (s.esdValve.position <= 0.5 ? 'TRIPPED' : `TRIP · ${esdStateText()}`) : describeOnOff(s.esdValve.position, s.esdValve.command);
     case 'vPortValve': return `${Math.round(s.vPortValve.commandPosition)}→${Math.round(s.vPortValve.actualPosition)}%`;
     case 'safetyValve': return s.safetyValve.lift > 0.5 ? 'OPEN' : 'SEATED';
     case 'steamTrap': return `ΔT ${Math.round(s.steamTrap.sim.inletTemp - s.steamTrap.sim.outletTemp)} °C`;

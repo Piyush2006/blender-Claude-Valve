@@ -1,271 +1,389 @@
 import { subscribe, simulationState } from '../simulation/simulationState.js';
-import { snapshot, createHistory, createEventLog, fmt, UNITS, THRESHOLDS } from './dashboardData.js';
-import { LEVEL_LABEL } from '../simulation/units.js';
-import { createSparkline, createTrendChart, createBar } from './charts.js';
+import { snapshot, fmt, THRESHOLDS } from './dashboardData.js';
+import { LEVEL_LABEL, flowDeviationPercent } from '../simulation/units.js';
+import { ANOMALY_CATALOG } from '../simulation/anomalyCatalog.js';
 import { createSchematic } from './schematic.js';
+import { overviewMetrics, impactText, historicalFor, activityFor, chartKind, targetFlow } from './anomalyAnalytics.js';
+import { createPositionChart, createBallResponseChart, createFlowChart, CHART_COLORS } from './anomalyCharts.js';
+import { positionHistory, ballSamplesWallClock } from './liveHistory.js';
+import { knowledgeFor } from '../maintenance/knowledge.js';
+import { ticketsFor, onTicketsChange, openTicketCount, tickets as allTickets, historicalComparison, trendSeries } from '../maintenance/ticketStore.js';
 
 /**
- * Dashboard view — system-level monitoring. Reads the same simulationState as
- * the Twin (through dashboardData.snapshot) and never edits it. Units come from
- * the shared unit configuration. The DOM is built once; values are patched at
- * ~4 Hz, charts every 2 s.
+ * Dashboard view — MONITOR → IDENTIFY ANOMALY → ANALYZE → TAKE ACTION.
+ *
+ * Reads the same simulationState as the Twin (through dashboardData.snapshot) and
+ * never edits it; units come from the shared unit configuration. Layout:
+ * status strip → process flow → component status + active anomalies →
+ * selected anomaly detail + recent activity. Ticketing opens as a modal /
+ * drawer on top of this view (maintenanceUI).
  */
-export function createDashboard(container, { onOpenComponent }) {
-  const history = createHistory();
-  const events = createEventLog(history);
-  const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+const RANGES = [['10m', 'Last 10 min'], ['60m', 'Last 60 min'], ['24h', 'Last 24 hours'], ['7d', 'Last 7 days']];
+const RANGE_MS = { '10m': 10 * 60 * 1000, '60m': 60 * 60 * 1000, '24h': 24 * 3600 * 1000, '7d': 7 * 24 * 3600 * 1000 };
+
+export function createDashboard(container, { onOpenComponent, onCreateTicket, onOpenTicket, onOpenReports }) {
+  const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+  const dateTimeFmt = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const dayFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+  const clockDate = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+  const clockTime = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
+  const view = { selectedId: null, userPicked: false, tab: 'overview', range: '60m', chart: null, chartFor: null, menuOpen: false };
 
   container.innerHTML = `
     <div class="dash">
-      <section class="kpis-row" id="dash-kpis"></section>
+      <div class="subbar">
+        <div class="subbar-left">
+          <b class="subbar-title">Yankee Dryer Steam System</b>
+          <span class="subbar-sep"></span>
+          <span class="cnt" data-cnt="critical"><i class="lg is-critical"></i><b>0</b> Critical</span>
+          <span class="cnt" data-cnt="attention"><i class="lg is-attention"></i><b>0</b> Attention</span>
+          <span class="subbar-sep"></span>
+          <span class="cnt" data-cnt="tickets">Open Tickets: <b>0</b></span>
+        </div>
+        <div class="subbar-right mono"><span id="clock-date"></span> <span id="clock-time"></span></div>
+      </div>
 
       <section class="card card-process">
-        <div class="card-head">
-          <div><h2>Process Overview</h2><p class="card-sub">Yankee dryer steam line with key components and live status</p></div>
+        <div class="card-head compact">
+          <h2>Process Flow — Yankee Dryer Steam System</h2>
           <span class="legend"><i class="lg is-normal"></i>Normal <i class="lg is-attention"></i>Attention <i class="lg is-critical"></i>Critical</span>
         </div>
         <div id="dash-schematic"></div>
       </section>
 
-      <section class="card card-vport" id="dash-vport">
-        <div class="card-head">
-          <h2>V-Port Control Valve</h2>
-          <span class="badge" data-vp="badge"></span>
-        </div>
-        <button class="vport-open" data-vp="open" type="button" title="Open in Twin">
-          <span class="vport-glyph" aria-hidden="true"></span>
-        </button>
-        <div class="vp-rows">
-          <div class="vp-row"><span>Command Position</span><b class="mono" data-vp="cmd"></b></div>
-          <div data-vp="cmdbar"></div>
-          <div class="vp-row"><span>Actual Position</span><b class="mono" data-vp="act"></b></div>
-          <div data-vp="actbar"></div>
-          <div class="vp-row vp-err"><span>Position Error</span><b class="mono" data-vp="err"></b></div>
-          <div class="vp-sub">Steam Flow (through valve)</div>
-          <div class="vp-row"><span>Expected <small>(at actual position)</small></span><b class="mono" data-vp="exp"></b></div>
-          <div data-vp="expbar"></div>
-          <div class="vp-row"><span>Actual</span><b class="mono" data-vp="actflow"></b></div>
-          <div data-vp="actflowbar"></div>
-          <div class="vp-row vp-err"><span>Flow Deviation</span><b class="mono" data-vp="dev"></b></div>
-          <div class="vp-divider"></div>
-          <div class="vp-row"><span>Trim Health <small>(estimated)</small></span><b class="mono" data-vp="health"></b></div>
-          <div data-vp="healthbar"></div>
-          <div class="vp-row"><span>Estimated Maintenance Window</span><b class="mono" data-vp="maint"></b></div>
-          <div class="vp-row"><span></span><span class="badge" data-vp="warn"></span></div>
-        </div>
-      </section>
+      <div class="dash-mid">
+        <section class="card card-status">
+          <div class="card-head compact"><div><h2>Component Status</h2><p class="card-sub">Select a component to view details</p></div></div>
+          <table class="status-table">
+            <thead><tr><th>Component</th><th>Status</th><th>Key Parameter / State</th></tr></thead>
+            <tbody id="dash-status-body"></tbody>
+          </table>
+        </section>
+        <section class="card card-anomalies">
+          <div class="card-head compact"><h2>Active Anomalies <span class="count-badge" id="dash-anom-count">0</span></h2></div>
+          <div id="dash-anomalies"></div>
+        </section>
+      </div>
 
-      <section class="trends-row" id="dash-trends"></section>
+      <div class="dash-bottom">
+        <section class="card card-detail" id="dash-detail">
+          <div class="detail-head" id="detail-head"></div>
+          <div class="detail-tabs" id="detail-tabs"></div>
+          <div class="detail-body" id="detail-body"></div>
+        </section>
+        <section class="card card-activity">
+          <div class="card-head compact"><h2>Recent Activity</h2><span class="card-sub">Last 7 days</span></div>
+          <div id="dash-activity"></div>
+        </section>
+      </div>
+      <p class="disclaimer">Live values are read from the Twin's simulation state (bar · kg/h · °C · rpm). Yesterday / 7-day baselines and older activity entries are a simulated historian for the demo; thresholds are demo values, not engineering limits.</p>
+    </div>`;
 
-      <section class="card card-table">
-        <div class="card-head"><h2>Component Status</h2></div>
-        <table class="status-table">
-          <thead><tr><th>Component</th><th>Status</th><th>Key Parameter</th><th>Value</th><th>Notes</th></tr></thead>
-          <tbody id="dash-status-body"></tbody>
-        </table>
-      </section>
+  const q = (sel) => container.querySelector(sel);
+  const schematic = createSchematic(q('#dash-schematic'), { onSelect: (id) => select(id) });
+  const statusBody = q('#dash-status-body'), anomHost = q('#dash-anomalies'), anomCount = q('#dash-anom-count');
+  const detailHead = q('#detail-head'), detailTabs = q('#detail-tabs'), detailBody = q('#detail-body'), activityHost = q('#dash-activity');
+  const cnt = { critical: q('[data-cnt=critical] b'), attention: q('[data-cnt=attention] b'), tickets: q('[data-cnt=tickets] b') };
 
-      <section class="card card-anomalies">
-        <div class="card-head"><h2>Active Anomalies</h2><span class="count-badge" id="dash-anom-count">0</span></div>
-        <div id="dash-anomalies"></div>
-        <div class="card-head events-head"><h2>Recent Events</h2></div>
-        <table class="events-table">
-          <thead><tr><th>Time</th><th>Event</th><th>Details</th><th>Severity</th></tr></thead>
-          <tbody id="dash-events"></tbody>
-        </table>
-      </section>
+  // Live clock (browser local time — never hard-coded).
+  const clockD = q('#clock-date'), clockT = q('#clock-time');
+  const tickClock = () => { const n = new Date(); clockD.textContent = clockDate.format(n); clockT.textContent = clockTime.format(n); };
+  tickClock(); setInterval(tickClock, 1000);
 
-      <section class="card card-insights">
-        <div class="card-head"><h2>Insights &amp; Recommendations</h2></div>
-        <ul id="dash-insights"></ul>
-        <p class="disclaimer">Simulated predictive-maintenance example. Thresholds (${THRESHOLDS.flowDeviationWarning}% / ${THRESHOLDS.flowDeviationCritical}% flow deviation, ${THRESHOLDS.positionErrorWarning}% position error) are configurable demo values, not engineering limits. Maintenance windows are estimates, not predictions.</p>
-      </section>
-    </div>
-  `;
-
-  // --- KPI cards ------------------------------------------------------------------
-  const kpiHost = container.querySelector('#dash-kpis');
-  const kpi = {};
-  const addKpi = (key, title, icon, extraHtml = '') => {
-    const card = document.createElement('div');
-    card.className = `kpi-card kpi-${key}`;
-    card.innerHTML = `<i class="kpi-icon icon-${icon}" aria-hidden="true"></i>
-      <div class="kpi-body"><div class="kpi-title">${title}</div><div class="kpi-value"><b data-k="value"></b><span class="kpi-unit" data-k="unit"></span></div>${extraHtml}</div>`;
-    kpiHost.appendChild(card);
-    kpi[key] = { card, value: card.querySelector('[data-k=value]'), unit: card.querySelector('[data-k=unit]'), delta: card.querySelector('[data-k=delta]'), sub: card.querySelector('[data-k=sub]'), spark: card.querySelector('[data-k=spark]') ? createSparkline(card.querySelector('[data-k=spark]')) : null };
-  };
-  addKpi('system', 'System Status', 'heart', `<div class="sys-counts"><span><i class="lg is-critical"></i><b data-k="crit"></b> Critical</span><span><i class="lg is-attention"></i><b data-k="att"></b> Attention</span><span><i class="lg is-normal"></i><b data-k="nor"></b> Normal</span></div>`);
-  addKpi('pressure', 'Steam Pressure', 'gauge', `<div class="kpi-delta" data-k="delta"></div><div class="kpi-spark" data-k="spark"></div>`);
-  addKpi('flow', 'Steam Flow (to Yankee)', 'flow', `<div class="kpi-sub" data-k="sub"></div><div class="kpi-spark" data-k="spark"></div>`);
-  addKpi('temperature', 'Steam Temperature', 'temp', `<div class="kpi-delta" data-k="delta"></div><div class="kpi-spark" data-k="spark"></div>`);
-  addKpi('moisture', 'Paper Moisture (After Yankee)', 'drop', `<div class="kpi-sub" data-k="sub"></div><div class="kpi-spark" data-k="spark"></div>`);
-  addKpi('anomalies', 'Active Anomalies', 'alert', `<div class="kpi-sub" data-k="sub"></div>`);
-  const sysCounts = { crit: kpi.system.card.querySelector('[data-k=crit]'), att: kpi.system.card.querySelector('[data-k=att]'), nor: kpi.system.card.querySelector('[data-k=nor]') };
-
-  // --- Process schematic ------------------------------------------------------------
-  const schematic = createSchematic(container.querySelector('#dash-schematic'), { onSelect: (id) => onOpenComponent?.(id) });
-
-  // --- V-Port panel ---------------------------------------------------------------
-  const vp = {};
-  for (const el of container.querySelectorAll('[data-vp]')) vp[el.dataset.vp] = el;
-  const cmdBar = createBar(vp.cmdbar, 'accent');
-  const actBar = createBar(vp.actbar, 'ok');
-  const expBar = createBar(vp.expbar, 'accent');
-  const actFlowBar = createBar(vp.actflowbar, 'ok');
-  const healthBar = createBar(vp.healthbar, 'ok');
-  vp.open.addEventListener('click', () => onOpenComponent?.('vPortValve'));
-
-  // --- Trend charts (Twin units) -------------------------------------------------------
-  const TRENDS = [
-    { key: 'flow', title: 'Steam Flow Trend', unit: UNITS.flow, fixed: 0, tone: 'accent', target: (s) => s.kpis.flow.target },
-    { key: 'pressure', title: 'Steam Pressure Trend', unit: UNITS.pressure, fixed: 1, tone: 'ok' },
-    { key: 'temperature', title: 'Steam Temperature Trend', unit: UNITS.temperature, fixed: 0, tone: 'alarm' },
-    { key: 'moisture', title: 'Paper Moisture Trend (Exit)', unit: UNITS.moisture, fixed: 1, tone: 'purple', target: () => THRESHOLDS.moistureTarget },
-  ];
-  const trendHost = container.querySelector('#dash-trends');
-  const trendEls = {};
-  for (const t of TRENDS) {
-    const card = document.createElement('div');
-    card.className = 'card trend-card';
-    card.innerHTML = `<div class="card-head"><div><h3>${t.title}</h3><span class="trend-unit">${t.unit}</span></div><span class="range-pill">Last 10 min · <b data-t="now"></b></span></div><div data-t="chart"></div>`;
-    trendHost.appendChild(card);
-    trendEls[t.key] = { now: card.querySelector('[data-t=now]'), chart: createTrendChart(card.querySelector('[data-t=chart]'), { unit: t.unit, fixed: t.fixed }) };
+  /* ------------------------------ selection ------------------------------ */
+  function select(id, { user = true } = {}) {
+    if (!id) return;
+    view.selectedId = id; view.userPicked = user;
+    view.tab = view.tab || 'overview';
+    update(true, true);
+    if (user) q('#dash-detail').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  function defaultSelection(s) {
+    if (view.userPicked && view.selectedId) return view.selectedId;
+    const worst = s.anomalies[0];                          // sorted: critical first
+    return worst?.componentId || view.selectedId || 'vPortValve';
   }
 
-  const statusBody = container.querySelector('#dash-status-body');
-  const anomHost = container.querySelector('#dash-anomalies');
-  const anomCount = container.querySelector('#dash-anom-count');
-  const eventsBody = container.querySelector('#dash-events');
-  const insightsList = container.querySelector('#dash-insights');
+  /* ------------------------------ update loop ------------------------------ */
+  let lastText = 0, lastChart = 0, trailing = null, cache = {};
+  const setHtml = (key, host, html) => { if (cache[key] !== html) { host.innerHTML = html; cache[key] = html; } };
 
-  // --- Update loop (throttled; the simulation notifies every frame) --------------------
-  let lastText = 0, lastCharts = 0, lastStatusHtml = '', lastEventsHtml = '', lastInsightsHtml = '', lastAnomHtml = '';
-  let firstPaint = true;
-  let trailing = null;
-
-  function update(force = false) {
+  function update(force = false, rebuildDetail = false) {
     const now = Date.now();
-    events.update();
-    const sampled = history.sample(now);
-    if (!force && !firstPaint && now - lastText < 250) {
-      if (!trailing) trailing = setTimeout(() => { trailing = null; update(true); }, 260);
-      return;
-    }
+    if (!force && now - lastText < 250) { if (!trailing) trailing = setTimeout(() => { trailing = null; update(true); }, 260); return; }
     lastText = now;
-    firstPaint = false;
     const s = snapshot();
+    const selectedId = defaultSelection(s);
+    if (selectedId !== view.selectedId) { view.selectedId = selectedId; rebuildDetail = true; }
+    const entry = s.anomalies.find((x) => x.componentId === selectedId) || null;
 
-    // KPIs
-    const sys = s.kpis.system;
-    setText(kpi.system.value, sys.label); setText(kpi.system.unit, '');
-    kpi.system.card.dataset.level = sys.level;
-    setText(sysCounts.crit, sys.critical); setText(sysCounts.att, sys.attention); setText(sysCounts.nor, sys.normal);
+    // Status strip
+    const critical = s.components.filter((c) => c.level === 'critical').length, attention = s.components.filter((c) => c.level === 'attention').length;
+    cnt.critical.textContent = critical; cnt.attention.textContent = attention; cnt.tickets.textContent = openTicketCount();
+    q('[data-cnt=critical]').dataset.zero = String(critical === 0); q('[data-cnt=attention]').dataset.zero = String(attention === 0);
 
-    setKpiNumber('pressure', fmt.pressureNum(s.kpis.pressure.value), UNITS.pressure, history.delta('pressure'), (d) => fmt.pressure(Math.abs(d)), 0.05);
-    setKpiNumber('temperature', fmt.temperatureNum(s.kpis.temperature.value), UNITS.temperature, history.delta('temperature'), (d) => fmt.temperature(Math.abs(d)), 0.5);
-
-    const f = s.kpis.flow;
-    setText(kpi.flow.value, fmt.flowNum(f.value)); setText(kpi.flow.unit, UNITS.flow);
-    setText(kpi.flow.sub, `Target ${fmt.flow(f.target)} · deviation ${fmt.signedPercent(f.deviation)} · ${LEVEL_LABEL[f.level]}`);
-    kpi.flow.sub.dataset.level = f.level; kpi.flow.card.dataset.level = f.level;
-    kpi.flow.spark.update(history.series.flow, f.level === 'normal' ? 'ok' : 'alarm');
-
-    const m = s.kpis.moisture;
-    setText(kpi.moisture.value, fmt.moistureNum(m.value)); setText(kpi.moisture.unit, UNITS.moisture);
-    setText(kpi.moisture.sub, `Target ${fmt.moisture(m.target)} · ${m.level === 'normal' ? 'within target' : 'above target'}`);
-    kpi.moisture.sub.dataset.level = m.level;
-    kpi.moisture.spark.update(history.series.moisture, m.level === 'normal' ? 'ok' : 'alarm');
-
-    const an = s.kpis.anomalies;
-    setText(kpi.anomalies.value, String(an.count)); setText(kpi.anomalies.unit, 'active');
-    setText(kpi.anomalies.sub, an.count ? s.anomalies.map((x) => `${x.component} · ${x.title}`).join(', ') : 'No active anomalies');
-    kpi.anomalies.card.dataset.level = an.level;
-
-    // Schematic
+    // Process flow
     const statuses = {};
     for (const r of s.components) statuses[r.id] = { level: r.level, text: schematicText(r) };
-    statuses.yankee = { level: 'normal', text: simulationState.yankee.running ? `Running · ${fmt.speed(simulationState.yankee.speedRpm)}` : 'Stopped' };
     statuses.separator = { level: 'normal', text: 'Normal' };
-    schematic.update(statuses, `${fmt.pressure(simulationState.steam.supplyPressure)} · ${fmt.temperature(s.kpis.temperature.value)}`, simulationState.condensate.direction < 0);
+    const target = targetFlow();
+    const dev = flowDeviationPercent(simulationState.steam.flow, target);
+    schematic.update(statuses, `${fmt.pressure(simulationState.steam.supplyPressure)} · ${fmt.temperature(s.kpis.temperature.value)}`, simulationState.condensate.direction < 0, {
+      selectedId,
+      live: {
+        flow: `${fmt.flow(s.kpis.flow.value)}${Math.abs(dev) > THRESHOLDS.flowDeviationWarning ? ` ${dev < 0 ? '▼' : '▲'} ${Math.abs(Math.round(dev))}%` : ''}`,
+        flowTone: Math.abs(dev) > THRESHOLDS.flowDeviationWarning ? 'critical' : '',
+        moisture: fmt.moisture(s.kpis.moisture.value), moistureTarget: `target ${fmt.moisture(THRESHOLDS.moistureTarget)}`,
+        moistureTone: s.kpis.moisture.level === 'normal' ? '' : 'attention',
+        condensateTemp: fmt.temperature(simulationState.condensate.temperature),
+      },
+    });
 
-    // V-Port card
-    const v = s.vport;
-    const badge = v.level === 'normal' ? 'Normal' : v.status === 'DETECTING' ? 'Detecting' : v.level === 'attention' ? 'Attention Required' : 'Critical';
-    setText(vp.badge, badge); vp.badge.dataset.level = v.level;
-    setText(vp.cmd, fmt.position(v.command)); cmdBar.update(v.command);
-    setText(vp.act, fmt.position(v.actual)); actBar.update(v.actual, v.error > THRESHOLDS.positionErrorWarning ? 'alarm' : 'ok');
-    setText(vp.err, `${fmt.percent(v.error)}${v.error > THRESHOLDS.positionErrorWarning ? ' ⚠' : ''}`); vp.err.dataset.tone = v.error > THRESHOLDS.positionErrorWarning ? 'alarm' : 'ok';
-    const flowScale = Math.max(v.expectedFlow, v.actualFlow, simulationState.steam.maxFlow) || 1;
-    setText(vp.exp, fmt.flow(v.expectedFlow)); expBar.update((v.expectedFlow / flowScale) * 100);
-    setText(vp.actflow, fmt.flow(v.actualFlow)); actFlowBar.update((v.actualFlow / flowScale) * 100, v.flowLevel === 'normal' ? 'ok' : v.flowLevel === 'attention' ? 'warn' : 'alarm');
-    setText(vp.dev, `${fmt.signedPercent(v.flowDeviation)}${v.flowLevel !== 'normal' ? ' ⚠' : ''}`); vp.dev.dataset.tone = v.flowLevel === 'normal' ? 'ok' : 'alarm';
-    setText(vp.health, fmt.percent(v.trimHealth)); healthBar.update(v.trimHealth, v.trimHealth < THRESHOLDS.trimHealthCritical ? 'alarm' : v.trimHealth < THRESHOLDS.trimHealthWarning ? 'warn' : 'ok');
-    setText(vp.maint, v.maintenance);
-    setText(vp.warn, v.earlyWarning ? 'Early Warning' : 'No warning'); vp.warn.dataset.level = v.earlyWarning ? 'attention' : 'normal';
+    // Component status table (no graphics — the process flow already shows the equipment)
+    setHtml('status', statusBody, s.components.map((r) => `<tr data-id="${r.id}" class="lvl-${r.level} ${r.id === selectedId ? 'is-selected' : ''}"><td>${r.name}</td><td><i class="lg is-${r.level}"></i>${LEVEL_LABEL[r.level]}</td><td class="mono ${r.level === 'critical' ? 'tone-critical' : r.level === 'attention' ? 'tone-attention' : ''}">${esc(r.state || r.value)}</td></tr>`).join(''));
 
-    // Trends (every 2 s or on new sample)
-    if (sampled || force || now - lastCharts > 2000) {
-      lastCharts = now;
-      for (const t of TRENDS) {
-        const series = history.series[t.key];
-        trendEls[t.key].chart.update(series, t.tone, { target: t.target ? t.target(s) : null, markers: history.markers, windowMs: history.windowMs });
-        setText(trendEls[t.key].now, `${Number(series[series.length - 1].v.toFixed(t.fixed)).toLocaleString('en-US')} ${t.unit}`);
-      }
+    // Active anomalies
+    setHtml('anoms', anomHost, s.anomalies.length ? s.anomalies.map((x) => anomalyCard(x, now, selectedId)).join('') : `<div class="empty"><i class="lg is-normal"></i>No active anomalies — all monitored components within normal range.</div>`);
+    patchDurations(anomHost, now);
+    anomCount.textContent = String(s.anomalies.length); anomCount.dataset.zero = String(s.anomalies.length === 0); anomCount.dataset.level = s.kpis.anomalies.level;
+
+    // Detail + activity
+    renderDetail(s, entry, selectedId, now, rebuildDetail);   // structural rebuild only on selection / tab / range changes, never on the periodic refresh
+    renderActivity(entry, selectedId, now);
+    if (view.chart && (force || now - lastChart > 500)) { lastChart = now; updateChart(entry, selectedId); }   // live trend: 2 Hz redraw
+  }
+
+  function schematicText(r) {
+    switch (r.id) {
+      case 'vPortValve': return `${fmt.position(simulationState.vPortValve.commandPosition)} cmd / ${fmt.position(simulationState.vPortValve.actualPosition)} act`;
+      case 'yankee': return r.state;
+      default: return r.short || r.state || LEVEL_LABEL[r.level];
     }
-
-    // Component status table
-    const statusHtml = s.components.map((r) => `<tr data-id="${r.id}"><td>${r.name}</td><td><i class="lg is-${r.level}"></i>${LEVEL_LABEL[r.level]}</td><td>${r.param}</td><td class="mono ${r.level === 'critical' ? 'tone-alarm' : r.level === 'attention' ? 'tone-warn' : ''}">${r.value}</td><td>${r.notes}</td></tr>`).join('');
-    if (statusHtml !== lastStatusHtml) { statusBody.innerHTML = statusHtml; lastStatusHtml = statusHtml; }
-
-    // Active anomalies (from the shared anomaly state)
-    const anomHtml = s.anomalies.length ? s.anomalies.map((x) => `
-      <div class="anomaly is-${x.level}" data-id="${x.componentId}" role="button" tabindex="0">
-        <div class="anomaly-head"><span class="anomaly-icon">!</span><div><b>${x.component}</b><div class="anomaly-title">${x.title}</div></div><span class="badge" data-level="${x.level}">${x.level === 'critical' ? 'Critical' : 'Attention Required'}</span></div>
-        <div class="anomaly-grid mono">${x.lines.map(([k, val]) => `<span>${k}: <b>${val}</b></span>`).join('')}</div>
-        <div class="anomaly-meta"><span>Detected: ${events.detectedAt ? timeFmt.format(new Date(events.detectedAt)) : '—'}</span><span>Duration: ${events.detectedAt ? durationText(now - events.detectedAt) : '—'}</span></div>
-        <div class="anomaly-text"><b>Impact:</b> ${x.impact}</div>
-        <div class="anomaly-text"><b>Early Warning:</b> ${x.warning}</div>
-      </div>`).join('') : `<div class="empty"><i class="lg is-normal"></i>No Active Anomalies — all monitored components within normal range.</div>`;
-    if (anomHtml !== lastAnomHtml) { anomHost.innerHTML = anomHtml; lastAnomHtml = anomHtml; }
-    setText(anomCount, String(s.anomalies.length)); anomCount.dataset.zero = String(s.anomalies.length === 0); anomCount.dataset.level = an.level;
-
-    // Events
-    const evHtml = events.events.map((e) => `<tr><td class="mono">${timeFmt.format(new Date(e.t))}</td><td>${e.event}</td><td class="muted">${e.details}</td><td><span class="sev sev-${e.severity.toLowerCase()}">${e.severity}</span></td></tr>`).join('');
-    if (evHtml !== lastEventsHtml) { eventsBody.innerHTML = evHtml; lastEventsHtml = evHtml; }
-
-    // Insights
-    const insHtml = s.insights.map((i) => `<li>${i}</li>`).join('');
-    if (insHtml !== lastInsightsHtml) { insightsList.innerHTML = insHtml; lastInsightsHtml = insHtml; }
   }
 
-  function setKpiNumber(key, valueText, unit, delta, fmtDelta, flatBelow) {
-    const k = kpi[key];
-    setText(k.value, valueText); setText(k.unit, unit);
-    const flat = Math.abs(delta) < flatBelow;
-    setText(k.delta, flat ? '— steady' : `${delta > 0 ? '▲ +' : '▼ −'}${fmtDelta(delta)} (last min)`);
-    k.delta.dataset.tone = flat ? 'flat' : 'ok';
-    k.spark.update(history.series[key], 'ok');
+  /* ------------------------------ anomaly cards ------------------------------ */
+  function anomalyCard(x, now, selectedId) {
+    const cols = cardColumns(x).map(([k, v, tone]) => `<div class="ac-col"><span>${esc(k)}</span><b class="mono ${tone || ''}">${esc(v)}</b></div>`).join('');
+    const ticket = ticketsFor(x.componentId, x.type)[0];
+    return `<div class="anomaly is-${x.level} ${x.componentId === selectedId ? 'is-selected' : ''}" data-id="${x.componentId}">
+      <div class="ac-main">
+        <div class="ac-title"><i class="lg is-${x.level}"></i><div><b>${esc(x.component)}</b><div class="ac-sub">${esc(x.title)}</div></div></div>
+        <div class="ac-cols">${cols}
+          <div class="ac-col"><span>Duration</span><b class="mono" data-dur="${x.detectedAt || ''}"></b></div>
+          <div class="ac-col"><span>Severity</span><b class="tone-${x.level}">${x.level === 'critical' ? 'Critical' : 'Warning'}</b></div>
+        </div>
+      </div>
+      <div class="ac-actions">${ticket ? `<span class="ac-ticket">${ticket.id}</span>` : ''}<button class="btn btn-view" type="button" data-act="view" data-id="${x.componentId}">VIEW</button></div>
+    </div>`;
+  }
+  function cardColumns(x) {
+    const v = simulationState.vPortValve, b = simulationState.ballValve;
+    switch (x.type) {
+      case 'VPORT_POSITION_MISMATCH': case 'VPORT_STICKING': case 'VPORT_SLOW_RESPONSE': case 'VPORT_HUNTING': {
+        const dev = flowDeviationPercent(simulationState.steam.flow, targetFlow());
+        return [['Command → Actual', `${fmt.position(v.commandPosition)} → ${fmt.position(v.actualPosition)}`, 'tone-critical'], ['Position Error', fmt.percent(v.positionError), 'tone-critical'], ['Steam Flow', `${dev < 0 ? '▼' : '▲'} ${Math.abs(Math.round(dev))}%`, Math.abs(dev) > THRESHOLDS.flowDeviationWarning ? 'tone-critical' : '']];
+      }
+      case 'BALL_SLOW_OPERATION':
+        return [['Command', x.lines[0][1]], ['Actual', x.lines[1][1], b.sim.moving ? 'tone-attention' : ''], ['Response Time', x.lines[2][1], 'tone-attention'], ['Expected', x.lines[3][1]]];
+      default:
+        return x.lines.slice(0, 3);
+    }
   }
 
-  anomHost.addEventListener('click', (e) => { const card = e.target.closest('.anomaly'); if (card) onOpenComponent?.(card.dataset.id || 'vPortValve'); });
-  statusBody.addEventListener('click', (e) => { const tr = e.target.closest('tr'); if (tr) onOpenComponent?.(tr.dataset.id); });
+  /* ------------------------------ detail panel ------------------------------ */
+  function renderDetail(s, entry, selectedId, now, rebuild) {
+    const compLabel = ANOMALY_CATALOG[selectedId]?.label || s.components.find((c) => c.id === selectedId)?.name || selectedId;
+    const ticket = ticketsFor(selectedId, entry?.type)[0];
+    const level = entry ? entry.level : 'normal';
+    const head = entry ? `
+      <div class="dh-left">
+        <div class="dh-title"><span class="dh-icon is-${level}">${level === 'critical' ? '⚠' : '⚠'}</span><h2>${esc(entry.component)} — ${esc(entry.title)}</h2><span class="badge" data-level="${level}">${level === 'critical' ? 'CRITICAL' : 'WARNING'}</span></div>
+        <div class="dh-sub">${esc(entry.subtitle || entry.explain)}</div>
+      </div>
+      <div class="dh-meta">
+        <div><span>First Detected</span><b class="mono">${entry.detectedAt ? dateTimeFmt.format(new Date(entry.detectedAt)) : '—'}</b></div>
+        <div><span>Duration</span><b class="mono" data-dur="${entry.detectedAt || ''}"></b></div>
+        ${ticket ? `<div><span>Ticket</span><b><span class="st" data-st="${ticket.status}">${ticket.status}</span></b></div>` : ''}
+      </div>
+      <div class="dh-actions">
+        <button class="btn" type="button" data-act="twin" data-id="${selectedId}">View in Twin</button>
+        ${ticket ? `<button class="btn btn-primary" type="button" data-act="ticket" data-ticket="${ticket.id}">View Ticket ${ticket.id}</button>` : `<button class="btn btn-primary" type="button" data-act="create" data-id="${selectedId}">Create Ticket</button>`}
+        <div class="menu-wrap"><button class="btn btn-more" type="button" data-act="menu" title="More">…</button><div class="menu" id="detail-menu" hidden>
+          ${ticket ? `<button type="button" data-act="ticket" data-ticket="${ticket.id}">Open ticket ${ticket.id}</button>` : ''}
+          <button type="button" data-act="reports">All maintenance tickets</button>
+          <button type="button" data-act="tab" data-tab="analytics">Open analytics</button>
+        </div></div>
+      </div>` : `
+      <div class="dh-left">
+        <div class="dh-title"><span class="dh-icon is-normal">✓</span><h2>${esc(compLabel)}</h2><span class="badge" data-level="normal">NORMAL</span></div>
+        <div class="dh-sub">No active anomaly — values within normal range.</div>
+      </div>
+      <div class="dh-meta"><div><span>Component</span><b>${esc(compLabel)}</b></div><div><span>Open Tickets</span><b class="mono">${ticketsFor(selectedId).length}</b></div></div>
+      <div class="dh-actions">
+        <button class="btn" type="button" data-act="twin" data-id="${selectedId}">View in Twin</button>
+        ${ticket ? `<button class="btn btn-primary" type="button" data-act="ticket" data-ticket="${ticket.id}">View Ticket ${ticket.id}</button>` : `<button class="btn btn-primary" type="button" disabled title="No active anomaly to raise a ticket for">Create Ticket</button>`}
+        <div class="menu-wrap"><button class="btn btn-more" type="button" data-act="menu" title="More">…</button><div class="menu" id="detail-menu" hidden>
+          ${ticket ? `<button type="button" data-act="ticket" data-ticket="${ticket.id}">Open ticket ${ticket.id}</button>` : ''}
+          <button type="button" data-act="reports">All maintenance tickets</button>
+        </div></div>
+      </div>`;
+    const headKey = `${selectedId}:${entry?.type || 'normal'}:${entry?.detectedAt || 0}:${ticket ? `${ticket.id}:${ticket.status}` : ''}:${ticketsFor(selectedId).length}`;
+    if (cache.headKey !== headKey) { detailHead.innerHTML = head; cache.headKey = headKey; }
+    patchDurations(detailHead, now);
+    const tabs = [['overview', 'Overview'], ['analytics', 'Analytics'], ['causes', 'Possible Causes'], ['recommendations', 'Recommendations'], ['activity', 'Activity']];
+    setHtml('tabs', detailTabs, tabs.map(([id, l]) => `<button type="button" data-tab="${id}" class="${id === view.tab ? 'is-active' : ''}">${l}</button>`).join(''));
+
+    const key = `${selectedId}:${entry?.type || 'normal'}:${view.tab}:${view.range}`;
+    const structural = rebuild || cache.detailKey !== key;
+    cache.detailKey = key;
+    if (view.tab === 'overview') {
+      const html = `<div class="ov-grid">
+        <div class="ov-left">
+          ${metricsHtml(entry, selectedId)}
+          <div class="impact is-${level}"><b>${entry ? 'Impact:' : 'Status:'}</b> ${entry ? esc(impactText(entry)) : 'Component operating normally. Live values shown above.'}</div>
+        </div>
+        <div class="ov-right">
+          <div class="chart-head"><h4>${chartTitle(selectedId, 'overview')}</h4>${rangeSelect(selectedId)}</div>
+          <div data-chart></div>
+          ${legendHtml(selectedId)}
+          ${historicalHtml(entry, selectedId)}
+        </div>
+      </div>`;
+      if (structural) { detailBody.innerHTML = html; mountChart(selectedId, entry); }
+      else { patch('[data-metrics]', metricsHtml(entry, selectedId)); patch('[data-hist]', historicalHtml(entry, selectedId)); }
+    } else if (view.tab === 'analytics') {
+      const rows = historicalComparison(selectedId === 'rotaryJoint' || selectedId === 'yankee' ? 'steam' : selectedId);
+      const html = `<div class="an-full">
+        <div class="chart-head"><h4>${chartTitle(selectedId, 'analytics')}</h4>${rangeSelect(selectedId)}</div>
+        <div data-chart class="tall"></div>
+        ${legendHtml(selectedId)}
+        <div class="an-two">
+          ${historicalHtml(entry, selectedId)}
+          <div class="hist-table-wrap"><h4>Historical Comparison</h4><table class="mt-comp-table"><thead><tr><th>Parameter</th><th>Today</th><th>Yesterday</th><th>7-Day Avg</th></tr></thead><tbody data-comp>${rows.map((r) => `<tr><td>${esc(r.label)}</td><td class="today mono">${esc(r.today)}</td><td class="mono">${esc(r.yesterday)}</td><td class="mono">${esc(r.avg7)}</td></tr>`).join('')}</tbody></table><p class="note">Yesterday / 7-day values are a simulated historian baseline (same units as the Twin).</p></div>
+        </div>
+      </div>`;
+      if (structural) { detailBody.innerHTML = html; mountChart(selectedId, entry); }
+      else { patch('[data-hist]', historicalHtml(entry, selectedId)); patch('[data-comp]', rows.map((r) => `<tr><td>${esc(r.label)}</td><td class="today mono">${esc(r.today)}</td><td class="mono">${esc(r.yesterday)}</td><td class="mono">${esc(r.avg7)}</td></tr>`).join('')); }
+    } else if (view.tab === 'causes' || view.tab === 'recommendations') {
+      const kb = entry ? knowledgeFor(entry.type) : null;
+      const list = view.tab === 'causes' ? kb?.causes : kb?.recommendations;
+      const html = entry ? `<div class="kb"><h4>${view.tab === 'causes' ? 'Possible Causes' : 'Recommendations'} <span class="note">${view.tab === 'causes' ? '— possible, not confirmed root causes' : '— concise checklist, confirm on site'}</span></h4>${view.tab === 'causes' ? `<ul class="kb-list">${list.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>` : `<ol class="kb-list">${list.map((c) => `<li>${esc(c)}</li>`).join('')}</ol>`}</div>`
+        : `<div class="kb"><p class="note">No active anomaly for this component — nothing to diagnose.</p></div>`;
+      if (structural) { detailBody.innerHTML = html; view.chart = null; }
+    } else {
+      const items = [];
+      if (entry?.detectedAt) items.push({ t: entry.detectedAt, text: `${entry.component} — ${entry.title} detected (${entry.detail})` });
+      for (const t of allTickets().filter((x) => x.componentId === selectedId)) for (const a of t.activity) if (!/detected$/.test(a.text)) items.push({ t: a.t, text: `${t.id}: ${a.text}` });
+      items.sort((a, b) => b.t - a.t);
+      const html = `<div class="kb"><h4>Activity</h4>${items.length ? `<ul class="timeline">${items.map((a) => `<li><span class="when mono">${dateTimeFmt.format(new Date(a.t))}</span>${esc(a.text)}</li>`).join('')}</ul>` : '<p class="note">No activity recorded yet.</p>'}</div>`;
+      if (structural || cache.act !== html) { detailBody.innerHTML = html; cache.act = html; view.chart = null; }
+    }
+  }
+  /** Live "Duration" fields are patched in place so open menus / dropdowns are not destroyed by the refresh. */
+  function patchDurations(host, now) {
+    for (const el of host.querySelectorAll('[data-dur]')) {
+      const t = Number(el.dataset.dur);
+      const txt = t ? durationText(now - t) : '—';
+      if (el.textContent !== txt) el.textContent = txt;
+    }
+  }
+  function patch(sel, html) { const el = detailBody.querySelector(sel); if (el && el.innerHTML !== html) el.innerHTML = html; }
+
+  function metricsHtml(entry, selectedId) {
+    const rows = overviewMetrics(entry || { componentId: selectedId, lines: [] });
+    return `<div data-metrics><div class="metrics">${rows.map((row) => `<div class="metric-row cols-${row.length}">${row.map((m) => `<div class="metric tone-${m.tone || 'plain'}"><span>${esc(m.label)}</span><b class="mono">${esc(m.value)}</b>${m.sub ? `<small>${esc(m.sub)}</small>` : ''}</div>`).join('')}</div>`).join('')}</div></div>`;
+  }
+  function historicalHtml(entry, selectedId) {
+    const h = historicalFor(entry || { componentId: selectedId });
+    const trendCls = h.trend === 'Worsening' ? 'tone-critical' : h.trend === 'Improving' ? 'tone-normal' : 'tone-muted';
+    const arrow = h.trend === 'Worsening' ? '↗' : h.trend === 'Improving' ? '↘' : '→';
+    return `<div data-hist><div class="hist"><h4>${esc(h.title)}</h4>${h.rows.map(([k, v, tone]) => `<div class="hist-row"><span>${esc(k)}</span><b class="mono tone-${tone || 'plain'}">${esc(v)}</b></div>`).join('')}<div class="hist-row"><span>Trend</span><b class="${trendCls}">${arrow} ${h.trend}</b></div></div></div>`;
+  }
+  function chartTitle(id, where) {
+    const kind = chartKind(id);
+    if (kind === 'position') return `Command vs Actual Position${where === 'analytics' ? '' : ` — ${RANGES.find((r) => r[0] === view.range)[1]}`}`;
+    if (kind === 'ballResponse') return 'Ball Valve Open/Close Response';
+    return 'Steam Flow vs Expected';
+  }
+  function rangeSelect(id) {
+    if (chartKind(id) === 'ballResponse') return `<span class="note">last stroke · 200 ms samples</span>`;
+    return `<select data-range class="range">${RANGES.map(([v, l]) => `<option value="${v}" ${v === view.range ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  }
+  function legendHtml(id) {
+    const kind = chartKind(id);
+    if (kind === 'position') return `<div class="legend-row"><span><i style="background:${CHART_COLORS.cmd}"></i>Commanded (%)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual (%)</span><span><i style="background:${CHART_COLORS.gap};border:1px solid rgba(220,38,38,0.4)"></i>Deviation</span></div>`;
+    if (kind === 'ballResponse') return `<div class="legend-row"><span><i style="background:${CHART_COLORS.cmd}"></i>Command (OPEN / CLOSE)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual state</span><span><i style="background:${CHART_COLORS.lag};border:1px solid rgba(245,158,11,0.5)"></i>Response lag</span></div>`;
+    return `<div class="legend-row"><span><i style="background:${CHART_COLORS.flow}"></i>Steam flow (kg/h)</span><span><i style="background:${CHART_COLORS.expected}"></i>Expected</span></div>`;
+  }
+  function mountChart(id, entry) {
+    const host = detailBody.querySelector('[data-chart]');
+    if (!host) { view.chart = null; return; }
+    const kind = chartKind(id);
+    const height = host.classList.contains('tall') ? 240 : 150;
+    view.chart = kind === 'position' ? createPositionChart(host, { height }) : kind === 'ballResponse' ? createBallResponseChart(host, { height }) : createFlowChart(host, { height });
+    view.chartFor = kind;
+    updateChart(entry, id);
+  }
+  function updateChart(entry, id) {
+    if (!view.chart || !detailBody.querySelector('[data-chart] svg')) return;
+    const kind = chartKind(id);
+    if (kind === 'ballResponse') view.chart.update(ballSamplesWallClock(), { windowMs: 40 * 1000, acceptable: simulationState.ballValve.sim.acceptableTime });
+    else {
+      const live = view.range === '10m' || view.range === '60m';
+      const pts = live ? positionHistory : trendSeries(view.range, entry?.detectedAt);
+      view.chart.update(pts, { rangeMs: RANGE_MS[view.range], onsetAt: entry?.detectedAt || null });
+    }
+  }
+
+  /* ------------------------------ recent activity ------------------------------ */
+  function renderActivity(entry, selectedId, now) {
+    const a = activityFor(selectedId, entry, []);
+    const squares = a.days.map((d, i) => `<i class="sq is-${d}" title="${dayFmt.format(new Date(now - (6 - i) * 86400000))}"></i>`).join('');
+    const html = `<div class="act-summary"><div class="sq-row">${squares}</div><span>${a.occurrences} occurrence${a.occurrences === 1 ? '' : 's'} · ${a.trend}</span></div>
+      <ul class="act-list">${a.items.slice(0, 8).map((i) => {
+        const isToday = now - i.t < 86400000 && new Date(i.t).getDate() === new Date(now).getDate();
+        return `<li><span class="when mono">${isToday ? timeFmt.format(new Date(i.t)) : dayFmt.format(new Date(i.t))}</span><i class="lg is-${i.level === 'info' ? 'info' : i.level}"></i><span class="txt">${esc(i.text)}</span>${i.tag ? `<span class="tag tone-${i.level}">${i.tag}</span>` : ''}</li>`;
+      }).join('')}</ul>`;
+    setHtml('activity', activityHost, html);
+  }
+
+  /* ------------------------------ events ------------------------------ */
+  container.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-act], [data-tab], tr[data-id], .anomaly[data-id]');
+    if (!btn) { closeMenu(); return; }
+    if (btn.dataset.act) {
+      const act = btn.dataset.act;
+      if (act === 'view') select(btn.dataset.id);
+      else if (act === 'twin') onOpenComponent?.(btn.dataset.id);
+      else if (act === 'create') onCreateTicket?.(btn.dataset.id);
+      else if (act === 'ticket') onOpenTicket?.(btn.dataset.ticket);
+      else if (act === 'reports') onOpenReports?.();
+      else if (act === 'tab') { view.tab = btn.dataset.tab; update(true, true); }
+      else if (act === 'menu') { const m = q('#detail-menu'); m.hidden = !m.hidden; return; }
+      closeMenu();
+      return;
+    }
+    if (btn.matches('[data-tab]') && btn.closest('#detail-tabs')) { view.tab = btn.dataset.tab; update(true, true); return; }
+    if (btn.matches('tr[data-id]')) select(btn.dataset.id);
+    else if (btn.matches('.anomaly[data-id]') && !e.target.closest('button')) select(btn.dataset.id);
+  });
+  container.addEventListener('change', (e) => { if (e.target.matches('[data-range]')) { view.range = e.target.value; update(true, true); } });
+  function closeMenu() { const m = q('#detail-menu'); if (m) m.hidden = true; }
 
   subscribe(() => update());
-  update(true);
+  onTicketsChange(() => update(true, true));
+  update(true, true);
 
-  return { update: () => update(true) };
+  return { update: () => update(true, true), select: (id) => select(id), openAnalytics: () => { view.tab = 'analytics'; update(true, true); q('#dash-detail').scrollIntoView({ block: 'start' }); } };
 }
 
-function schematicText(r) {
-  switch (r.id) {
-    case 'ballValve': return r.value.split(' ')[0];
-    case 'esdValve': return r.level === 'normal' ? r.value.split(' ')[0] : r.value;
-    case 'vPortValve': return r.level === 'normal' ? 'Normal' : LEVEL_LABEL[r.level];
-    case 'safetyValve': return r.notes.startsWith('OPEN') ? 'Open' : 'Closed';
-    case 'steamTrap': return r.notes.includes('HEALTHY') ? 'Healthy' : LEVEL_LABEL[r.level];
-    case 'checkValve': return r.value.includes('REVERSE') ? 'Reverse' : r.value === 'NO FLOW' ? 'No flow' : 'Forward';
-    default: return 'Normal';
-  }
+export function durationText(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  return `${h} h ${(m % 60).toString().padStart(2, '0')} min`;
 }
-function durationText(ms) { const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000); return m ? `${m} min ${s} s` : `${s} s`; }
-function setText(el, text) { if (el && el.textContent !== String(text)) el.textContent = text; }
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }

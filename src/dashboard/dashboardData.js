@@ -1,5 +1,5 @@
 import { simulationState as S } from '../simulation/simulationState.js';
-import { ANOMALY_LABELS, esdStateText, ballStateText } from '../simulation/anomalyEngine.js';
+import { ANOMALY_LABELS, esdStateText, ballStateText, ballResponseTime, ballStrokeInfo } from '../simulation/anomalyEngine.js';
 import { anomalyByType, ANOMALY_CATALOG } from '../simulation/anomalyCatalog.js';
 import { UNITS, THRESHOLDS, fmt, flowDeviationPercent, levelOfStatus, levelOfDeviation, maxLevel, SYSTEM_LABEL } from '../simulation/units.js';
 
@@ -23,12 +23,6 @@ const SIM = {
   sampleEvery: 2000,                 // ms between live samples (and backfill spacing)
 };
 
-/** Paper moisture after the Yankee (%): rises when steam flow falls below nominal. DEMO. */
-function simulatedMoisture(fraction, t) {
-  const deficit = Math.max(0, 0.70 - fraction);
-  return 4.2 + 2.2 * deficit + 0.05 * Math.sin(t * 0.7);
-}
-
 function maintenanceWindow(health) {
   // Rough demo mapping (~1 month per 12 % of remaining health) shown as a range — an estimate, not a prediction.
   if (health >= THRESHOLDS.trimHealthWarning) return 'not yet indicated';
@@ -42,7 +36,7 @@ function maintenanceWindow(health) {
 export function snapshot(t = S.time) {
   const v = S.vPortValve, a = S.anomaly;
   const fraction = S.flow.fraction;
-  const moisture = simulatedMoisture(fraction, t);
+  const moisture = S.paper.moisture;              // computed by the engine — same value as the Twin panel
 
   // Flow references (all in Twin units):
   //   targetFlow   — healthy flow at the COMMANDED position (what the control system asked for)
@@ -102,54 +96,73 @@ function upstreamGate() {
 
 function statusRows() {
   const ball = S.ballValve, esd = S.esdValve, v = S.vPortValve, psv = S.safetyValve, rj = S.rotaryJoint, cv = S.checkValve, trap = S.steamTrap;
-  const a = S.anomaly;
-  const flagged = (id) => a.component === id && (a.status === 'ANOMALY' || a.status === 'WARNING') ? anomalyByType(a.type)?.short : null;
+  const own = (id) => (S.anomalies || []).find((x) => x.component === id && x.active) || null;
+  const flagged = (id) => { const x = own(id); return x ? anomalyByType(x.type)?.short : null; };
 
   // Ball valve — isolation: OPEN / CLOSED, never a modulating %.
   const ballState = ballStateText();
   const ballRow = { id: 'ballValve', name: 'Ball Valve', level: levelOfStatus(ball.status), param: 'State', value: ballState, notes: `Command ${ball.command === 100 ? 'OPEN' : 'CLOSE'}` };
   if (ball.sim.anomaly === 'passing' && ball.position <= 0.5 && S.steam.flow > 0) { ballRow.param = 'Leakage Flow'; ballRow.value = fmt.flow(S.steam.flow); ballRow.notes = 'Command CLOSE · state CLOSED · passing'; }
   if (flagged('ballValve')) ballRow.notes += ` · ${flagged('ballValve')}`;
+  // Short state for the status table (discrete isolation-valve states only).
+  ballRow.state = title(ballState);
+  if (ball.sim.anomaly === 'slowOperation' && flagged('ballValve')) { ballRow.state = ball.sim.moving ? (ball.command === 0 ? 'Closing Slowly' : 'Opening Slowly') : `${title(ballState)} · slow response ${fmt.seconds(ballResponseTime())}`; ballRow.short = ball.sim.moving ? ballRow.state : 'Slow Response'; }
+  if (ball.sim.anomaly === 'passing' && flagged('ballValve')) ballRow.state = `Closed · passing ${fmt.flow(S.steam.flow)}`;
 
   // ESD — isolation: OPEN / CLOSED / CLOSING / PARTIALLY OPEN.
   const esdRow = { id: 'esdValve', name: 'ESD Valve', level: levelOfStatus(esd.status), param: 'State', value: esdStateText(), notes: esd.command === 0 ? 'Trip command CLOSE' : 'No trip' };
   if (esd.sim.anomaly === 'slowShutdown' && (esd.sim.tripping || esd.sim.lastTripDuration)) esdRow.notes += ` · shutdown ${fmt.seconds(esd.sim.tripping ? esd.sim.tripElapsed : esd.sim.lastTripDuration)}`;
   if (esd.sim.anomaly === 'lowAirPressure') { esdRow.param = 'Air Pressure'; esdRow.value = `${fmt.pressure(esd.sim.airPressure)} (min ${fmt.pressure(esd.sim.minAirPressure)})`; esdRow.notes = `State ${esdStateText()}`; }
   if (flagged('esdValve')) esdRow.notes += ` · ${flagged('esdValve')}`;
+  esdRow.state = title(esdStateText());
+  if (esd.sim.anomaly === 'lowAirPressure' && flagged('esdValve')) esdRow.state = `${title(esdStateText())} · air ${fmt.pressure(esd.sim.airPressure)}`;
 
   // V-Port — control valve: position error, or flow deviation for trim wear.
   const vRow = v.mode === 'trimWear'
     ? { id: 'vPortValve', name: 'V-Port Control Valve', level: levelOfStatus(v.status), param: 'Flow Deviation', value: fmt.signedPercent(flowDeviationPercent(S.steam.flow, v.expectedFlow)), notes: `Cmd ${fmt.position(v.commandPosition)} / Act ${fmt.position(v.actualPosition)} · trim ${v.sim.trimWear.health}%` }
     : { id: 'vPortValve', name: 'V-Port Control Valve', level: levelOfStatus(v.status), param: 'Position Error', value: fmt.percent(v.positionError), notes: `Cmd ${fmt.position(v.commandPosition)} / Act ${fmt.position(v.actualPosition)}` };
   if (flagged('vPortValve')) vRow.notes += ` · ${flagged('vPortValve')}`;
+  vRow.state = v.mode === 'trimWear' && flagged('vPortValve') ? `flow ${fmt.signedPercent(flowDeviationPercent(S.steam.flow, v.expectedFlow))} vs expected` : `${fmt.position(v.commandPosition)} cmd / ${fmt.position(v.actualPosition)} act`;
 
   // Safety valve — pressure driven.
   const psvOpen = psv.lift > 0.5;
   const psvRow = { id: 'safetyValve', name: 'Safety / Relief Valve', level: levelOfStatus(psv.status), param: 'Set / Current Pressure', value: `${fmt.pressure(psv.setPressure)} / ${fmt.pressure(psv.sim.linePressure, 2)}`, notes: psvOpen ? `OPEN · relief ${fmt.flow(psv.reliefFlow)}` : `CLOSED · relief ${fmt.flow(0)}` };
   if (psv.sim.anomaly === 'chattering') psvRow.notes = `${psvOpen ? 'OPEN' : 'CLOSED'} · ${psv.sim.openCount} openings`;
   if (flagged('safetyValve')) psvRow.notes += ` · ${flagged('safetyValve')}`;
+  psvRow.state = psv.sim.anomaly === 'chattering' && flagged('safetyValve') ? `Chattering · ${psv.sim.openCount} openings` : psvOpen ? `Open · relief ${fmt.flow(psv.reliefFlow)}` : 'Closed';
 
-  const rjRow = { id: 'rotaryJoint', name: 'Rotary Joint', level: 'normal', param: 'Seal Temperature', value: fmt.temperature(rj.sealTemp), notes: S.yankee.running ? `Running · ${fmt.speed(S.yankee.speedRpm)}` : 'Yankee stopped' };
+  const rjRow = { id: 'rotaryJoint', name: 'Rotary Joint', level: 'normal', param: 'Seal Temperature', value: fmt.temperature(rj.sealTemp), notes: S.yankee.running ? `Running · ${fmt.speed(S.yankee.speedRpm)}` : 'Yankee stopped', state: 'Normal' };
+  const yankeeRow = { id: 'yankee', name: 'Yankee Dryer', level: 'normal', param: 'Speed · Surface Temp', value: `${fmt.speed(S.yankee.speedRpm)} · ${fmt.temperature(S.yankee.surfaceTemp)}`, notes: S.yankee.running ? 'Running' : 'Stopped', state: S.yankee.running ? `${fmt.speed(S.yankee.speedRpm)} · ${fmt.temperature(S.yankee.surfaceTemp)}` : 'Stopped' };
 
   // Steam trap — condition driven (temperatures), never a position.
   const dT = trap.sim.inletTemp - trap.sim.outletTemp;
   const trapCond = trap.sim.anomaly === 'failedOpen' ? 'FAILED OPEN' : trap.sim.anomaly === 'blocked' ? 'BLOCKED' : trap.sim.anomaly === 'poorRemoval' ? 'POOR CONDENSATE REMOVAL' : 'HEALTHY';
-  const trapRow = { id: 'steamTrap', name: 'Steam Trap', level: levelOfStatus(trap.status), param: 'Inlet / Outlet Temp', value: `${fmt.temperatureNum(trap.sim.inletTemp)} / ${fmt.temperature(trap.sim.outletTemp)}`, notes: `ΔT ${fmt.temperature(dT)} · ${trapCond}` };
+  const trapRow = { id: 'steamTrap', name: 'Steam Trap', level: levelOfStatus(trap.status), param: 'Inlet / Outlet Temp', value: `${fmt.temperatureNum(trap.sim.inletTemp)} / ${fmt.temperature(trap.sim.outletTemp)}`, notes: `ΔT ${fmt.temperature(dT)} · ${trapCond}`, state: flagged('steamTrap') ? title(trapCond) : 'Normal' };
 
   // Check valve — passive: direction / state.
   const reverse = S.condensate.direction < 0;
   const cvOpen = cv.lift > 0.05;
   const cvRow = { id: 'checkValve', name: 'Check Valve', level: levelOfStatus(cv.status), param: 'Flow Direction', value: reverse ? '← REVERSE' : S.condensate.flow > 0 ? 'CONDENSATE →' : 'NO FLOW', notes: reverse ? `disc ${cvOpen ? 'open' : 'near seat'} · ${fmt.flow(Math.abs(S.condensate.flow))} reverse` : cvOpen ? `disc open · ${fmt.flow(S.condensate.flow)}` : (cv.sim.anomaly === 'failureToOpen' ? 'disc stuck closed · condensate backing up' : 'disc seated') };
   if (flagged('checkValve')) cvRow.notes += ` · ${flagged('checkValve')}`;
+  cvRow.state = reverse ? 'Reverse' : S.condensate.flow > 0 ? 'Forward' : cv.sim.anomaly === 'failureToOpen' && flagged('checkValve') ? 'Stuck Closed' : 'No Flow';
 
-  return [ballRow, esdRow, vRow, psvRow, rjRow, trapRow, cvRow];
+  return [ballRow, esdRow, vRow, psvRow, trapRow, cvRow, rjRow, yankeeRow];
 }
+
+function title(text) { return String(text).toLowerCase().replace(/(^|[\s·(])([a-z])/g, (m, pre, c) => pre + c.toUpperCase()); }
 
 /* ------------------------------ active anomalies ------------------------------ */
 
 function activeAnomalies({ expectedFlow, actualFlow, flowDeviation, trimHealth }) {
-  const a = S.anomaly, v = S.vPortValve;
-  if (!(a.status === 'ANOMALY' || a.status === 'WARNING') || !a.type) return [];
+  return (S.anomalies || []).filter((r) => r.active && r.type).map((r) => anomalyEntry(r, { expectedFlow, actualFlow, flowDeviation, trimHealth }));
+}
+
+/** Dashboard entry for one detection record (component, type, status, detail, detectedAt). */
+export function anomalyEntry(a, ctx = null) {
+  const v = S.vPortValve;
+  const expectedFlow = ctx?.expectedFlow ?? v.expectedFlow, actualFlow = ctx?.actualFlow ?? S.steam.flow;
+  const flowDeviation = ctx?.flowDeviation ?? flowDeviationPercent(actualFlow, expectedFlow);
+  const trimHealth = ctx?.trimHealth ?? Math.round(v.sim.trimWear.health);
   const def = anomalyByType(a.type);
   const level = levelOfStatus(a.status);
   const lines = [];
@@ -170,7 +183,10 @@ function activeAnomalies({ expectedFlow, actualFlow, flowDeviation, trimHealth }
     case 'ESD_LOW_AIR':
       lines.push(['Air Pressure', fmt.pressure(S.esdValve.sim.airPressure)], ['Minimum Required', fmt.pressure(S.esdValve.sim.minAirPressure)], ['Trip Command', S.esdValve.command === 0 ? 'CLOSE' : 'NONE'], ['Actual State', esdStateText()]);
       break;
-    case 'BALL_FAIL_TO_OPEN': case 'BALL_FAIL_TO_CLOSE': case 'BALL_SLOW_OPERATION':
+    case 'BALL_SLOW_OPERATION':
+      { const k = ballStrokeInfo(); lines.push(['Command', k.command], ['Actual', k.actual], ['Response Time', fmt.seconds(k.responseTime)], ['Expected', `< ${fmt.seconds(S.ballValve.sim.acceptableTime)}`]); }
+      break;
+    case 'BALL_FAIL_TO_OPEN': case 'BALL_FAIL_TO_CLOSE':
       lines.push(['Command', S.ballValve.command === 100 ? 'OPEN' : 'CLOSE'], ['Actual', ballStateText()], ['Steam Flow', fmt.flow(S.steam.flow)]);
       break;
     case 'BALL_PASSING':
@@ -191,16 +207,49 @@ function activeAnomalies({ expectedFlow, actualFlow, flowDeviation, trimHealth }
     default:
       lines.push(['Evidence', a.detail]);
   }
-  return [{
+  return {
     componentId: a.component,
-    component: def?.componentLabel || a.component,
+    component: def?.componentLabel || ANOMALY_CATALOG[a.component]?.label || a.component,
     title: (ANOMALY_LABELS[a.type] || def?.label || a.type).replace(/^(V-Port|ESD|Ball Valve|Safety Valve|Steam Trap|Check Valve) /, ''),
     type: a.type,
+    status: a.status,
     level,
     lines,
+    detail: a.detail,
+    detectedAt: a.detectedAt || null,
+    explain: def?.explain || '',
+    subtitle: subtitleFor(a.type),
     impact: impactFor(a.type),
     warning: level === 'critical' ? 'Attention required. Monitor closely and plan inspection.' : 'Early indication only. Trend and schedule inspection at the next opportunity.',
-  }];
+  };
+}
+
+function subtitleFor(type) {
+  switch (type) {
+    case 'VPORT_POSITION_MISMATCH': return 'Actual position below command';
+    case 'VPORT_STICKING': return 'Valve not moving on command';
+    case 'VPORT_SLOW_RESPONSE': return 'Valve reaches command too slowly';
+    case 'VPORT_HUNTING': return 'Position oscillating around command';
+    case 'VPORT_TRIM_WEAR': return 'Flow above expected for position';
+    case 'BALL_SLOW_OPERATION': return 'Valve is taking longer than expected to close';
+    case 'BALL_FAIL_TO_CLOSE': return 'Valve did not close on command';
+    case 'BALL_FAIL_TO_OPEN': return 'Valve did not open on command';
+    case 'BALL_PASSING': return 'Closed valve passing steam';
+    case 'ESD_FAIL_TO_CLOSE': return 'Trip issued, valve still open';
+    case 'ESD_SLOW_SHUTDOWN': return 'Shutdown slower than acceptable';
+    case 'ESD_PARTIAL_CLOSURE': return 'Valve stopped part-way on trip';
+    case 'ESD_LOW_AIR': return 'Instrument air below minimum';
+    case 'PSV_UNEXPECTED_OPENING': return 'Lifting below set pressure';
+    case 'PSV_FAILURE_TO_OPEN': return 'Pressure above set, valve closed';
+    case 'PSV_CHATTERING': return 'Rapid open / close cycling';
+    case 'TRAP_FAILED_OPEN': return 'Live steam passing to condensate';
+    case 'TRAP_BLOCKED': return 'No condensate discharge';
+    case 'TRAP_POOR_REMOVAL': return 'Sluggish condensate removal';
+    case 'CHECK_REVERSE_FLOW': return 'Condensate flowing backward';
+    case 'CHECK_FAILURE_TO_OPEN': return 'Disc stuck closed';
+    case 'CHECK_FAILURE_TO_CLOSE': return 'Disc stuck open';
+    default: return '';
+  }
 }
 
 function impactFor(type) {
@@ -213,7 +262,7 @@ function impactFor(type) {
     case 'ESD_SLOW_SHUTDOWN': return 'Delayed steam isolation on trip';
     case 'BALL_FAIL_TO_OPEN': return 'No steam to the Yankee — production impact';
     case 'BALL_FAIL_TO_CLOSE': case 'BALL_PASSING': return 'Steam line cannot be fully isolated';
-    case 'BALL_SLOW_OPERATION': return 'Slow isolation / start-up';
+    case 'BALL_SLOW_OPERATION': return 'Steam isolation is delayed — the valve takes longer than expected to close';
     case 'PSV_UNEXPECTED_OPENING': return 'Steam loss to atmosphere and reduced line pressure';
     case 'PSV_FAILURE_TO_OPEN': return 'Over-pressure protection compromised';
     case 'PSV_CHATTERING': return 'Seat damage risk, pressure instability';
@@ -222,7 +271,7 @@ function impactFor(type) {
     case 'TRAP_POOR_REMOVAL': return 'Reduced heat transfer, uneven drying';
     case 'CHECK_REVERSE_FLOW': case 'CHECK_FAILURE_TO_CLOSE': return 'Condensate returning toward the trap / Yankee';
     case 'CHECK_FAILURE_TO_OPEN': return 'Condensate cannot reach the return header';
-    default: return 'Lower steam flow / potential moisture variation';
+    default: return 'Steam flow is significantly below expected flow and may affect Yankee drying performance';
   }
 }
 
@@ -301,7 +350,6 @@ export function createEventLog(history) {
 
   let lastStatus = S.anomaly.status, lastType = null, lastFlow = S.steam.flow, prevFlowSeen = S.steam.flow;
   let lastScenario = `${S.anomalySim.component}:${S.anomalySim.anomaly}`;
-  let detectedAt = null;
 
   function update() {
     const now = Date.now();
@@ -309,12 +357,10 @@ export function createEventLog(history) {
     const flaggedNow = a.status === 'ANOMALY' || a.status === 'WARNING';
     const flaggedBefore = lastStatus === 'ANOMALY' || lastStatus === 'WARNING';
     if (flaggedNow && !flaggedBefore) {
-      detectedAt = now;
       const label = ANOMALY_LABELS[a.type] || 'Anomaly';
       add(now, `${label} detected`, a.detail, a.status === 'WARNING' ? 'Warning' : 'Critical');
       history?.addMarker(now, label, a.status === 'WARNING' ? 'warn' : 'alarm');
     } else if (!flaggedNow && flaggedBefore) {
-      detectedAt = null;
       add(now, 'Returned to normal', lastType ? ANOMALY_LABELS[lastType] : '', 'Info');
       history?.addMarker(now, 'Returned to normal', 'ok');
     }
@@ -337,5 +383,5 @@ export function createEventLog(history) {
       lastFlow = flow;
     }
   }
-  return { events, update, get detectedAt() { return detectedAt; } };
+  return { events, update };
 }

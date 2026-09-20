@@ -62,8 +62,8 @@ export function createInfoPanel(container, { onFocus }) {
     stateEl.classList.toggle('ok', st.status === 'NORMAL');
     stateEl.classList.toggle('detecting', st.status === 'DETECTING' || st.status === 'WARNING');
     stateEl.classList.toggle('alarm', st.status === 'ANOMALY');
-    const flagged = (st.status === 'ANOMALY' || st.status === 'WARNING') && s.anomaly.component === id;
-    const stateText = flagged ? `State: ${st.status} — ${anomalyShortName(s.anomaly.type)}` : `State: ${st.status}`;
+    const own = (s.anomalies || []).find((x) => x.component === id && x.active);
+    const stateText = own ? `State: ${st.status} — ${anomalyShortName(own.type)}` : `State: ${st.status}`;
     stateEl.querySelector('[data-state]').textContent = stateText;
     if (detectEl) {
       const html = detectionReasonHtml(s, id);
@@ -85,7 +85,7 @@ function rowsFor(id, s) {
   switch (id) {
     case 'ballValve':
       return [
-        ['Command', describeOnOff(s.ballValve.command)],
+        ['Command', s.ballValve.command === 100 ? 'OPEN' : 'CLOSE'],
         ['Actual State', ballStateText()],
         ['Steam Flow', `${s.steam.flow.toLocaleString()} kg/h`],
         ['Upstream Pressure', `${s.steam.supplyPressure.toFixed(1)} bar`],
