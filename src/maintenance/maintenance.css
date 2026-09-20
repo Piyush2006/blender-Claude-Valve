@@ -3,9 +3,9 @@
 
 .mt-wrap { padding: 14px 16px 24px; max-width: 1720px; margin: 0 auto; display: grid; gap: 12px; }
 .mt-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
-.mt-kpi { padding: 10px 14px; border-left: 4px solid var(--ok); }
-.mt-kpi[data-level="critical"] { border-left-color: var(--alarm); }
-.mt-kpi[data-level="attention"] { border-left-color: var(--warn); }
+.mt-kpi { padding: 10px 14px; }
+.mt-kpi[data-level="critical"] .mt-kpi-value { color: var(--alarm); }
+.mt-kpi[data-level="attention"] .mt-kpi-value { color: var(--warn); }
 .mt-kpi-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
 .mt-kpi-value { font-size: 24px; font-weight: 800; line-height: 1.2; }
 .mt-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
