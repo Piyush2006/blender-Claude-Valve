@@ -14,8 +14,8 @@ import { ticketsFor, onTicketsChange, openTicketCount, tickets as allTickets, hi
  *
  * Reads the same simulationState as the Twin (through dashboardData.snapshot) and
  * never edits it; units come from the shared unit configuration. Layout:
- * status strip → process flow → component health (status + anomalies in one table) →
- * selected anomaly detail. Ticketing opens as a modal /
+ * status strip → process flow → component health table whose rows expand (accordion) into
+ * the selected component's detail panel. Ticketing opens as a modal /
  * drawer on top of this view (maintenanceUI).
  */
 const RANGES = [['10m', 'Last 10 min'], ['60m', 'Last 60 min'], ['24h', 'Last 24 hours'], ['7d', 'Last 7 days']];
@@ -26,7 +26,7 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
   const clockDate = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
   const clockTime = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
-  const view = { selectedId: null, userPicked: false, tab: 'overview', range: '60m', chart: null, chartFor: null, menuOpen: false };
+  const view = { selectedId: null, userPicked: false, expanded: true, tab: 'overview', range: '60m', chart: null, chartFor: null, menuOpen: false };
 
   container.innerHTML = `
     <div class="dash">
@@ -61,22 +61,19 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
         </table>
       </section>
 
-      <div class="dash-bottom">
-        <section class="card card-detail" id="dash-detail">
-          <div class="detail-head" id="detail-head"></div>
-          <div class="detail-tabs" id="detail-tabs"></div>
-          <div class="detail-body" id="detail-body"></div>
-        </section>
-      </div>
       <p class="disclaimer">Live values are read from the Twin's simulation state (bar · kg/h · °C · rpm). Yesterday / 7-day baselines are a simulated historian for the demo; thresholds are demo values, not engineering limits.</p>
     </div>`;
 
   const q = (sel) => container.querySelector(sel);
   const schematic = createSchematic(q('#dash-schematic'), { onSelect: (id) => select(id) });
   const statusBody = q('#dash-status-body'), anomCount = q('#dash-anom-count'), healthSub = q('#dash-health-sub');
+  // Accordion row: one persistent <tr> holding the detail panel; it is moved under the expanded component row.
+  const detailRow = document.createElement('tr');
+  detailRow.className = 'detail-row';
+  detailRow.innerHTML = `<td colspan="6"><section class="card-detail" id="dash-detail"><div class="detail-head" id="detail-head"></div><div class="detail-tabs" id="detail-tabs"></div><div class="detail-body" id="detail-body"></div></section></td>`;
   const rowFmt = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
   const lastUpdated = new Map();   // componentId → { key, at } : when the row's state last changed
-  const detailHead = q('#detail-head'), detailTabs = q('#detail-tabs'), detailBody = q('#detail-body');
+  const detailHead = detailRow.querySelector('#detail-head'), detailTabs = detailRow.querySelector('#detail-tabs'), detailBody = detailRow.querySelector('#detail-body');
   const cnt = { critical: q('[data-cnt=critical] b'), attention: q('[data-cnt=attention] b'), tickets: q('[data-cnt=tickets] b') };
 
   // Live clock (browser local time — never hard-coded).
@@ -85,12 +82,14 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
   tickClock(); setInterval(tickClock, 1000);
 
   /* ------------------------------ selection ------------------------------ */
-  function select(id, { user = true } = {}) {
+  function select(id, { user = true, toggle = false } = {}) {
     if (!id) return;
-    view.selectedId = id; view.userPicked = user;
+    if (toggle && view.expanded && view.selectedId === id) { view.expanded = false; view.userPicked = true; update(true, true); return; }
+    view.selectedId = id; view.userPicked = user; view.expanded = true;
     view.tab = view.tab || 'overview';
+    cache.detailKey = '';                                  // the panel is (re)mounted under a new row → rebuild
     update(true, true);
-    if (user) q('#dash-detail').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (user) requestAnimationFrame(() => detailRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
   }
   function defaultSelection(s) {
     if (view.userPicked && view.selectedId) return view.selectedId;
@@ -145,8 +144,9 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
       const at = lastUpdated.get(r.id).at;
       const ticket = an ? ticketsFor(r.id, an.type)[0] : null;
       const tone = r.level === 'critical' ? 'tone-critical' : r.level === 'attention' ? 'tone-attention' : 'tone-accent';
-      return `<tr data-id="${r.id}" class="lvl-${r.level} ${r.id === selectedId ? 'is-selected' : ''}">
-        <td>${esc(r.name)}</td>
+      const open = r.id === selectedId && view.expanded;
+      return `<tr data-id="${r.id}" class="lvl-${r.level} ${r.id === selectedId ? 'is-selected' : ''} ${open ? 'is-open' : ''}" aria-expanded="${open}">
+        <td><i class="chev" aria-hidden="true"></i>${esc(r.name)}</td>
         <td><i class="lg is-${r.level}"></i>${LEVEL_LABEL[r.level]}</td>
         <td class="mono ${tone}">${esc(r.state || r.value)}</td>
         <td class="${an ? tone : 'tone-muted'}">${an ? `<b>${esc(an.title)}</b>${ticket ? ` <span class="row-ticket">${ticket.id}</span>` : ''}` : '—'}</td>
@@ -154,10 +154,11 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
         <td class="col-action">${an ? `<button class="btn btn-view" type="button" data-act="view" data-id="${r.id}">View</button>` : '<span class="tone-muted">—</span>'}</td>
       </tr>`; }).join(''));
     anomCount.textContent = String(s.components.length);
+    mountDetailRow(selectedId);
     setHtml('healthsub', healthSub, s.anomalies.length ? `<span class="tone-critical"><b>${s.anomalies.length}</b> active ${s.anomalies.length === 1 ? 'anomaly' : 'anomalies'}</span>` : `<span class="tone-normal">No active anomalies</span>`);
 
-    // Detail + activity
-    renderDetail(s, entry, selectedId, now, rebuildDetail);   // structural rebuild only on selection / tab / range changes, never on the periodic refresh
+    // Detail (inline accordion panel under the expanded row)
+    if (view.expanded) renderDetail(s, entry, selectedId, now, rebuildDetail);   // structural rebuild only on selection / tab / range changes, never on the periodic refresh
     if (view.chart && (force || now - lastChart > 500)) { lastChart = now; updateChart(entry, selectedId); }   // live trend: 2 Hz redraw
   }
 
@@ -337,6 +338,13 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
     }
   }
 
+  /** Keep the accordion row directly under the expanded component row (or out of the table when collapsed). */
+  function mountDetailRow(selectedId) {
+    const tr = view.expanded ? statusBody.querySelector(`tr[data-id="${selectedId}"]`) : null;
+    if (!tr) { if (detailRow.parentNode) detailRow.remove(); return; }
+    if (tr.nextElementSibling !== detailRow) tr.after(detailRow);
+  }
+
   /** Cycle-test record with wall-clock start / end for the chart. */
   function esdTestWallClock() {
     const ct = simulationState.esdValve.cycleTest; if (!ct) return null;
@@ -347,6 +355,7 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
 
   /* ------------------------------ events ------------------------------ */
   container.addEventListener('click', (e) => {
+    if (e.target.closest('.detail-row') && !e.target.closest('[data-act], [data-tab]')) { closeMenu(); return; }
     const btn = e.target.closest('[data-act], [data-tab], tr[data-id]');
     if (!btn) { closeMenu(); return; }
     if (btn.dataset.act) {
@@ -362,7 +371,7 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
       return;
     }
     if (btn.matches('[data-tab]') && btn.closest('#detail-tabs')) { view.tab = btn.dataset.tab; update(true, true); return; }
-    if (btn.matches('tr[data-id]')) select(btn.dataset.id);
+    if (btn.matches('tr[data-id]')) select(btn.dataset.id, { toggle: true });
   });
   container.addEventListener('change', (e) => { if (e.target.matches('[data-range]')) { view.range = e.target.value; update(true, true); } });
   function closeMenu() { const m = q('#detail-menu'); if (m) m.hidden = true; }
@@ -371,7 +380,7 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
   onTicketsChange(() => update(true, true));
   update(true, true);
 
-  return { update: () => update(true, true), select: (id) => select(id), openAnalytics: () => { view.tab = 'analytics'; update(true, true); q('#dash-detail').scrollIntoView({ block: 'start' }); } };
+  return { update: () => update(true, true), select: (id) => select(id), openAnalytics: () => { view.tab = 'analytics'; view.expanded = true; cache.detailKey = ''; update(true, true); detailRow.scrollIntoView({ block: 'start' }); } };
 }
 
 export function durationText(ms) {

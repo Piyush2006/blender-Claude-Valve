@@ -144,10 +144,11 @@ rpm) via `units.js`. There are no generic KPI cards.
   condensate return temperature). Clicking a symbol selects the component.
 * Component Health: one table for all 8 components — Status, Condition / Key Parameter,
   the component's own Anomaly (several can be active at once), Last Updated (when the row's
-  state last changed; anomaly rows date from detection) and a **View** action that selects
-  the anomaly in the detail panel below. Isolation valves use discrete states (Open, Closing,
+  state last changed; anomaly rows date from detection) and a **View** action. Rows are an
+  accordion: clicking a row (or View) expands the component's detail panel inline under it,
+  clicking again collapses it. Isolation valves use discrete states (Open, Closing,
   Closed, Closing Slowly, Fail to Close…), the V-Port shows `70% cmd / 32% act`.
-* Selected anomaly detail: header (component — anomaly, CRITICAL / WARNING, subtitle, first
+* Component detail (inline under the expanded row): header (component — anomaly, CRITICAL / WARNING, subtitle, first
   detected, duration, **View in Twin**, **Create Ticket**, ⋯ menu) and tabs Overview /
   Analytics / Possible Causes / Recommendations / Activity.
   * V-Port position mismatch: commanded, actual, position error, steam flow (▼ % vs command),
