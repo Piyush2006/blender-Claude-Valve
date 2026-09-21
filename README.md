@@ -138,7 +138,7 @@ ANALYZE → TAKE ACTION and reads the **same `simulationState`** as the Twin thr
 rpm) via `units.js`. There are no generic KPI cards.
 
 * Status strip: `N Critical · N Attention · Open Tickets: N` and the live local date/time.
-* Process Flow: flat 2D schematic (red steam, blue condensate) with a status dot + short state
+* Process Flow: flat 2D schematic (green steam, blue condensate; red only marks anomalies) with a status dot + short state
   per component, the selected component framed in blue (red tint when critical), and the
   relevant live values (steam flow with deviation vs command, paper moisture vs target,
   condensate return temperature). Clicking a symbol selects the component.

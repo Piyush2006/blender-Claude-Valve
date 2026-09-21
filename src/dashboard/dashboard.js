@@ -47,7 +47,7 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
       <section class="card card-process">
         <div class="card-head compact">
           <h2>Process Flow — Yankee Dryer Steam System</h2>
-          <span class="legend"><i class="lg is-normal"></i>Normal <i class="lg is-attention"></i>Attention <i class="lg is-critical"></i>Critical</span>
+          <span class="legend"><i class="lg is-normal"></i>Normal <i class="lg is-attention"></i>Attention <i class="lg is-critical"></i>Critical <span class="legend-sep"></span><i class="lg-line steam"></i>Steam <i class="lg-line cond"></i>Condensate</span>
         </div>
         <div id="dash-schematic"></div>
       </section>
