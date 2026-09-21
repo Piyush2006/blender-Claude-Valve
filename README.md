@@ -161,8 +161,6 @@ rpm) via `units.js`. There are no generic KPI cards.
     marker); *Closing Response Time* today / yesterday / 7-day / normal with a trend.
   * Other anomalies fall back to their evidence lines, a flow-vs-expected chart and a generic
     comparison, so all 23 catalogue anomalies work.
-* Recent Activity: 7-day squares, occurrence count and trend, then the live detections (real
-  timestamps) merged with a clearly simulated prior history for the selected component.
 * Ticketing is part of the Dashboard: **Create Ticket** opens a modal pre-filled from the
   selected anomaly (issue, component, anomaly, severity, priority P1 for critical / P2 for
   warning, assignee, due date, generated description, e-mail notification) → `MT-1024…` →

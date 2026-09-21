@@ -44,7 +44,7 @@
 .subbar .cnt[data-cnt="attention"]:not([data-zero="true"]) b { color: var(--warn); }
 .subbar-right { color: var(--muted); font-size: 12px; }
 .dash-mid { display: grid; grid-template-columns: minmax(360px, 5fr) minmax(420px, 7fr); gap: 10px; }
-.dash-bottom { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 1fr); gap: 10px; }
+.dash-bottom { display: grid; grid-template-columns: 1fr; gap: 10px; }
 
 .card { background: #fff; border: 1px solid var(--card-border); border-radius: var(--radius); padding: 12px 14px; box-shadow: 0 1px 2px rgba(15,23,42,0.04); min-width: 0; }
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
@@ -212,18 +212,6 @@
 .timeline li::before { content: ''; position: absolute; left: -6px; top: 6px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 2px solid #fff; }
 .timeline .when { display: block; font-size: 11px; color: var(--muted); }
 
-/* ===== Recent activity ===== */
-.act-summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
-.sq-row { display: inline-flex; gap: 3px; }
-.sq { width: 13px; height: 13px; border-radius: 3px; background: rgba(15,23,42,0.08); }
-.sq.is-attention { background: var(--warn); } .sq.is-critical { background: var(--alarm); } .sq.is-info { background: rgba(37,99,235,0.35); }
-.act-list { list-style: none; margin: 0; padding: 0; }
-.act-list li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(15,23,42,0.06); font-size: 12px; }
-.act-list li:last-child { border-bottom: 0; }
-.act-list .when { color: var(--muted); font-size: 11px; width: 46px; flex: none; }
-.act-list .txt { flex: 1; min-width: 0; line-height: 1.3; }
-.act-list .tag { font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 999px; background: rgba(220,38,38,0.1); flex: none; }
-.act-list .tag.tone-attention { background: rgba(245,158,11,0.14); }
 
 @media (max-width: 1180px) {
   .dash-mid, .dash-bottom, .ov-grid, .an-two { grid-template-columns: 1fr; }

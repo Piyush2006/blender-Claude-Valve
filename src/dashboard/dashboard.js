@@ -3,7 +3,7 @@ import { snapshot, fmt, THRESHOLDS } from './dashboardData.js';
 import { LEVEL_LABEL, flowDeviationPercent } from '../simulation/units.js';
 import { ANOMALY_CATALOG } from '../simulation/anomalyCatalog.js';
 import { createSchematic } from './schematic.js';
-import { overviewMetrics, impactText, historicalFor, activityFor, chartKind, targetFlow, seriesChartFor, esdCycleSummary } from './anomalyAnalytics.js';
+import { overviewMetrics, impactText, historicalFor, chartKind, targetFlow, seriesChartFor, esdCycleSummary } from './anomalyAnalytics.js';
 import { createPositionChart, createBallResponseChart, createFlowChart, createSeriesChart, createEsdCycleChart, CHART_COLORS } from './anomalyCharts.js';
 import { positionHistory, ballSamplesWallClock, esdSamplesWallClock, processSamplesWallClock } from './liveHistory.js';
 import { knowledgeFor } from '../maintenance/knowledge.js';
@@ -15,16 +15,14 @@ import { ticketsFor, onTicketsChange, openTicketCount, tickets as allTickets, hi
  * Reads the same simulationState as the Twin (through dashboardData.snapshot) and
  * never edits it; units come from the shared unit configuration. Layout:
  * status strip → process flow → component status + active anomalies →
- * selected anomaly detail + recent activity. Ticketing opens as a modal /
+ * selected anomaly detail. Ticketing opens as a modal /
  * drawer on top of this view (maintenanceUI).
  */
 const RANGES = [['10m', 'Last 10 min'], ['60m', 'Last 60 min'], ['24h', 'Last 24 hours'], ['7d', 'Last 7 days']];
 const RANGE_MS = { '10m': 10 * 60 * 1000, '60m': 60 * 60 * 1000, '24h': 24 * 3600 * 1000, '7d': 7 * 24 * 3600 * 1000 };
 
 export function createDashboard(container, { onOpenComponent, onCreateTicket, onOpenTicket, onOpenReports }) {
-  const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
   const dateTimeFmt = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-  const dayFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
   const clockDate = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
   const clockTime = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
@@ -72,18 +70,14 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
           <div class="detail-tabs" id="detail-tabs"></div>
           <div class="detail-body" id="detail-body"></div>
         </section>
-        <section class="card card-activity">
-          <div class="card-head compact"><h2>Recent Activity</h2><span class="card-sub">Last 7 days</span></div>
-          <div id="dash-activity"></div>
-        </section>
       </div>
-      <p class="disclaimer">Live values are read from the Twin's simulation state (bar · kg/h · °C · rpm). Yesterday / 7-day baselines and older activity entries are a simulated historian for the demo; thresholds are demo values, not engineering limits.</p>
+      <p class="disclaimer">Live values are read from the Twin's simulation state (bar · kg/h · °C · rpm). Yesterday / 7-day baselines are a simulated historian for the demo; thresholds are demo values, not engineering limits.</p>
     </div>`;
 
   const q = (sel) => container.querySelector(sel);
   const schematic = createSchematic(q('#dash-schematic'), { onSelect: (id) => select(id) });
   const statusBody = q('#dash-status-body'), anomHost = q('#dash-anomalies'), anomCount = q('#dash-anom-count');
-  const detailHead = q('#detail-head'), detailTabs = q('#detail-tabs'), detailBody = q('#detail-body'), activityHost = q('#dash-activity');
+  const detailHead = q('#detail-head'), detailTabs = q('#detail-tabs'), detailBody = q('#detail-body');
   const cnt = { critical: q('[data-cnt=critical] b'), attention: q('[data-cnt=attention] b'), tickets: q('[data-cnt=tickets] b') };
 
   // Live clock (browser local time — never hard-coded).
@@ -150,7 +144,6 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
 
     // Detail + activity
     renderDetail(s, entry, selectedId, now, rebuildDetail);   // structural rebuild only on selection / tab / range changes, never on the periodic refresh
-    renderActivity(entry, selectedId, now);
     if (view.chart && (force || now - lastChart > 500)) { lastChart = now; updateChart(entry, selectedId); }   // live trend: 2 Hz redraw
   }
 
@@ -364,18 +357,6 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
     const now = Date.now(), simNow = simulationState.time;
     const wall = (st) => now - (simNow - st) * 1000;
     return { startAt: wall(ct.startSt), endAt: wall(ct.active ? simNow : ct.endSt), period: ct.period, total: ct.total, cycles: ct.cycles };
-  }
-
-  /* ------------------------------ recent activity ------------------------------ */
-  function renderActivity(entry, selectedId, now) {
-    const a = activityFor(selectedId, entry, []);
-    const squares = a.days.map((d, i) => `<i class="sq is-${d}" title="${dayFmt.format(new Date(now - (6 - i) * 86400000))}"></i>`).join('');
-    const html = `<div class="act-summary"><div class="sq-row">${squares}</div><span>${a.occurrences} occurrence${a.occurrences === 1 ? '' : 's'} · ${a.trend}</span></div>
-      <ul class="act-list">${a.items.slice(0, 8).map((i) => {
-        const isToday = now - i.t < 86400000 && new Date(i.t).getDate() === new Date(now).getDate();
-        return `<li><span class="when mono">${isToday ? timeFmt.format(new Date(i.t)) : dayFmt.format(new Date(i.t))}</span><i class="lg is-${i.level === 'info' ? 'info' : i.level}"></i><span class="txt">${esc(i.text)}</span>${i.tag ? `<span class="tag tone-${i.level}">${i.tag}</span>` : ''}</li>`;
-      }).join('')}</ul>`;
-    setHtml('activity', activityHost, html);
   }
 
   /* ------------------------------ events ------------------------------ */
