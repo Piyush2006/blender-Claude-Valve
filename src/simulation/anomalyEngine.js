@@ -38,7 +38,7 @@ export const ANOMALY_LABELS = {
   ESD_SLOW_SHUTDOWN: 'ESD Slow Shutdown',
   ESD_PARTIAL_CLOSURE: 'ESD Partial Closure',
   ESD_LOW_AIR: 'ESD Low Pneumatic Air Pressure',
-  ESD_RESPONSE_DEGRADATION: 'ESD Response Degradation',
+  ESD_RESPONSE_DEGRADATION: 'ESD Slow Response',
   BALL_FAIL_TO_OPEN: 'Ball Valve Fail to Open',
   BALL_FAIL_TO_CLOSE: 'Ball Valve Fail to Close',
   BALL_SLOW_OPERATION: 'Ball Valve Slow Response',
@@ -188,6 +188,15 @@ function detectVPort(mode) {
       const swing = huntingSamples.length ? max - min : 0;
       return { condition: swing > LIMITS.huntingSwing && crossings >= LIMITS.huntingCrossings, type: VPORT_HUNTING,
         detail: `swing ${swing.toFixed(1)}% · ${crossings} crossings / ${LIMITS.huntingWindow} s` };
+    }
+    case 'cyclicDegradation': {
+      const ct = v.cycleTest, c = v.sim.cyclic;
+      const d = ct?.lastDelay || 0;
+      const stalled = !!ct && ct.ceiling < c.hi - a.threshold;          // valve can no longer reach the high command
+      const slow = !!ct && ct.current >= 4 && d > c.acceptableDelay;
+      const stage = stalled ? 'MISMATCH' : esdCycleStage(d, c);
+      return { condition: stalled || slow, type: stalled ? VPORT_MISMATCH : VPORT_SLOW_RESPONSE,
+        detail: ct ? `cycle ${ct.current}/${ct.total} · response ${d.toFixed(1)} s (acceptable < ${c.acceptableDelay.toFixed(1)} s)${stalled ? ` · reaches ${Math.round(ct.ceiling)}% of ${c.hi}%` : ''} · ${stage}` : 'cycle test not started' };
     }
     case 'trimWear': {
       const expected = Math.max(1, v.expectedFlow);

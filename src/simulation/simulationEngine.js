@@ -388,6 +388,31 @@ function updateVPortActual(dt) {
       v.actualPosition = Math.max(0, Math.min(100, v.commandPosition + osc));
       break;
     }
+    case 'cyclicDegradation': {
+      // Command steps lo → hi every `period` s (one cycle = lo + hi). The positioner answers with a
+      // dead time that grows cycle by cycle (0.5 s → 1–2 s → 2–3 s → 4–5 s) and, in the last
+      // cycles, loses stroke authority: the valve no longer reaches the commanded position.
+      const c = v.sim.cyclic;
+      let ct = v.cycleTest;
+      if (!ct) ct = v.cycleTest = startVPortCycleTest(v, c);
+      const t = S.time;
+      if (ct.active) {
+        const el = t - ct.startSt;
+        const k = Math.min(ct.total, Math.floor(el / (2 * ct.period)) + 1);
+        if (k > ct.current) {
+          for (let i = ct.current + 1; i <= k; i++) ct.cycles.push({ index: i, cmdAt: ct.startSt + (i - 1) * 2 * ct.period, delay: vportCycleDelay(i, c), shortfall: Math.max(0, c.hi - vportCeiling(i, c)) });
+          ct.current = k;
+        }
+        ct.lastDelay = vportCycleDelay(ct.current, c);
+        ct.ceiling = vportCeiling(ct.current, c);
+        v.commandPosition = vportCycleCommandAt(ct, c, t);
+        if (el >= 2 * ct.period * ct.total) { ct.active = false; v.commandPosition = c.hi; }
+      }
+      const delay = ct.current ? vportCycleDelay(ct.current, c) : 0;
+      const delayed = ct.active ? vportCycleCommandAt(ct, c, t - delay) : (t - ct.endSt < delay ? vportCycleCommandAt(ct, c, t - delay) : v.commandPosition);
+      v.actualPosition = slew(v.actualPosition, Math.min(delayed, ct.ceiling), RATES.vPortTracking, dt);
+      break;
+    }
     case 'trimWear': {
       v.actualPosition = slew(v.actualPosition, v.commandPosition, RATES.vPortTracking, dt);
       const wearFrac = 1 - Math.max(0, Math.min(100, v.sim.trimWear.health)) / 100;
@@ -401,6 +426,33 @@ function updateVPortActual(dt) {
   v.actualVelocity = smooth(v.actualVelocity, vel, dt, 6);
   const physRate = v.mode === 'hunting' ? 400 : RATES.vPortPhysical;
   v.physicalPosition = slew(v.physicalPosition, v.actualPosition, physRate, dt);
+}
+
+/** V-Port cyclic test: response dead time in cycle k, spread over the whole test (fraction of cycles). */
+export function vportCycleDelay(k, c) {
+  const f = c.count > 1 ? (k - 1) / (c.count - 1) : 1;
+  const d0 = c.delayInitial ?? 0.5, dF = c.delayFinal ?? 5.0;
+  if (f <= 0.2) return d0;                                        // good
+  if (f <= 0.47) return 1.0 + ((f - 0.2) / 0.27) * 1.0;           // small delay 1 → 2 s
+  if (f <= 0.73) return 2.0 + ((f - 0.47) / 0.26) * 1.0;          // increasing delay 2 → 3 s
+  return 4.0 + ((f - 0.73) / 0.27) * (dF - 4.0);                  // degraded 4 → 5 s
+}
+/** V-Port cyclic test: highest position the valve can still reach in cycle k (stroke authority lost over the last 45 % of the test). */
+export function vportCeiling(k, c) {
+  const f = c.count > 1 ? (k - 1) / (c.count - 1) : 1;
+  if (f < 0.55) return 100;
+  return Math.round(100 - ((f - 0.55) / 0.45) * (100 - c.finalActual));
+}
+function vportCycleCommandAt(ct, c, t) {
+  const el = t - ct.startSt;
+  if (el < 0) return c.hi;
+  const k = Math.floor(el / (2 * ct.period));
+  if (k >= ct.total) return c.hi;
+  return (el - k * 2 * ct.period) < ct.period ? c.lo : c.hi;
+}
+export function startVPortCycleTest(v, c, startSt = S.time) {
+  v.cycleTest = { active: true, startSt, period: c.period, total: c.count, current: 0, cycles: [], lastDelay: 0, ceiling: 100, endSt: startSt + 2 * c.period * c.count };
+  return v.cycleTest;
 }
 
 function smooth(current, target, dt, rate = 3) {

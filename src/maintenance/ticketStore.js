@@ -26,7 +26,7 @@ export const PRIORITIES = ['P1', 'P2', 'P3', 'P4'];
 export const SEVERITIES = ['Critical', 'Warning', 'Info'];
 export const STATUS_FLOW = ['OPEN', 'ASSIGNED', 'IN PROGRESS', 'RESOLVED', 'CLOSED'];
 
-const STORAGE_KEY = 'twin.maintenance.v1';
+const STORAGE_KEY = 'twin.maintenance.v2';   // v2: fresh store, seeded with the closed oscillation ticket
 const listeners = new Set();
 const store = load();
 
@@ -35,7 +35,47 @@ function load() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) { const parsed = JSON.parse(raw); if (parsed && Array.isArray(parsed.tickets)) return { tickets: parsed.tickets, nextId: parsed.nextId || 1024, emails: parsed.emails || [] }; }
   } catch { /* ignore */ }
-  return { tickets: [], nextId: 1024, emails: [] };
+  const seeded = { tickets: [seedClosedOscillationTicket()], nextId: 1024, emails: [] };
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded)); } catch { /* ignore */ }
+  return seeded;
+}
+
+/**
+ * Demo history: a V-Port Hunting / Oscillation anomaly from yesterday that was ticketed,
+ * repaired (positioner gain re-tuned) and CLOSED. Shown in the ticket list and in the
+ * V-Port's Activity tab; it is not an active anomaly.
+ */
+function seedClosedOscillationTicket() {
+  const day = new Date(); day.setDate(day.getDate() - 1);
+  const at = (h, m) => { const d = new Date(day); d.setHours(h, m, 0, 0); return d.getTime(); };
+  const detectedAt = at(9, 12), createdAt = at(9, 15);
+  const measurements = { commandPosition: 70, actualPosition: 70, positionError: 0, steamFlow: 8750, expectedFlow: 8750, targetFlow: 8750, flowDeviation: 0, steamPressure: 7.4, steamTemperature: 174, trimHealth: 100 };
+  const description = 'V-Port actual position is oscillating around the 70% command with a swing of about 12% (64–76%) and more than 3 crossings per 3 seconds. Steam flow to the Yankee is cycling between roughly 8,000 and 9,500 kg/h.';
+  const dueDate = new Date(day.getTime() + 2 * 86400000).toISOString().slice(0, 10);
+  return {
+    id: 'MT-1017', componentId: 'vPortValve', component: 'V-Port Control Valve', issue: 'Hunting / Oscillation', type: 'VPORT_HUNTING',
+    severity: 'Critical', priority: 'P1', assigneeId: 'inst-eng', assignee: 'Instrumentation Engineer', dueDate,
+    description, status: 'CLOSED', createdAt, updatedAt: at(11, 42),
+    anomaly: {
+      componentId: 'vPortValve', component: 'V-Port Control Valve', title: 'Hunting / Oscillation', type: 'VPORT_HUNTING', level: 'critical', severity: 'Critical',
+      lines: [['Command', '70%'], ['Actual', '64% – 76%'], ['Error', '6%'], ['Oscillation', 'swing 12% · 4 crossings / 3 s']],
+      impact: 'Oscillating steam flow — cyclic drying variation', detail: 'swing 12.0% · 4 crossings / 3 s', subtitle: 'Position oscillating around command',
+      detectedAt, capturedAt: createdAt, measurements, description, scenario: { component: 'vPortValve', anomaly: 'hunting' },
+    },
+    resolution: { rootCause: 'Positioner gain', correctiveAction: 'Reduced positioner gain and re-tuned the flow loop', notes: 'Oscillation reproduced in manual; positioner gain found too high after the last calibration. Gain reduced, loop re-tuned, stroke verified stable at 70%.', at: at(11, 40) },
+    verification: { at: at(11, 42), normal: true, values: [['Commanded', '70%'], ['Actual', '70%'], ['Error', '0%'], ['Steam Flow', '8,750 kg/h'], ['Expected Flow (at command)', '8,750 kg/h']] },
+    activity: [
+      { t: detectedAt, text: 'V-Port Hunting / Oscillation detected' },
+      { t: createdAt, text: 'Ticket MT-1017 created (P1 · Critical)' },
+      { t: createdAt + 1, text: 'Assignee set to Instrumentation Engineer' },
+      { t: createdAt + 2, text: 'Email notification sent to instrumentation.engineer@example.com' },
+      { t: at(9, 16), text: 'Assigned to Instrumentation Engineer' },
+      { t: at(10, 5), text: 'Work started' },
+      { t: at(11, 40), text: 'Marked resolved — Positioner gain' },
+      { t: at(11, 42), text: 'Verified NORMAL in the Twin' },
+      { t: at(11, 42) + 1, text: 'Ticket closed' },
+    ],
+  };
 }
 function save() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ tickets: store.tickets, nextId: store.nextId, emails: store.emails })); } catch { /* ignore */ }
@@ -154,6 +194,7 @@ export function liveValuesFor(componentId) {
 export function tickets() { return store.tickets; }
 export function getTicket(id) { return store.tickets.find((t) => t.id === id) || null; }
 export function openTicketCount() { return store.tickets.filter((t) => t.status !== 'CLOSED').length; }
+export function closedTicketCount() { return store.tickets.filter((t) => t.status === 'CLOSED').length; }
 export function ticketsFor(componentId, type) { return store.tickets.filter((t) => t.componentId === componentId && (!type || t.type === type) && t.status !== 'CLOSED'); }
 
 function addActivity(t, text, when = Date.now()) { t.activity.push({ t: when, text }); }
@@ -243,10 +284,14 @@ export function historicalComparison(componentId) {
   const jitter = (base, pct, seed) => Math.round(base * (1 + pct * Math.sin(seed)));
   const rows = [];
   if (componentId === 'vPortValve') {
-    const sign = Math.sign(v.commandPosition - v.actualPosition) || 1;
-    rows.push({ label: 'Commanded Position', today: fmt.position(v.commandPosition), yesterday: fmt.position(v.commandPosition), avg7: fmt.position(v.commandPosition) });
-    rows.push({ label: 'Actual Position', today: fmt.position(v.actualPosition), yesterday: fmt.position(v.commandPosition - 18 * sign), avg7: fmt.position(v.commandPosition - 11 * sign) });
-    rows.push({ label: 'Position Error', today: fmt.percent(v.positionError), yesterday: fmt.percent(18), avg7: fmt.percent(11) });
+    const ct = v.cycleTest;
+    const cmd = ct ? v.sim.cyclic.hi : v.commandPosition;                       // during a cyclic test: the high command
+    const act = ct ? Math.min(cmd, ct.ceiling) : v.actualPosition;              // …and the position the valve can reach
+    const sign = Math.sign(cmd - act) || 1;
+    rows.push({ label: ct ? 'Commanded Position (high step)' : 'Commanded Position', today: fmt.position(cmd), yesterday: fmt.position(cmd), avg7: fmt.position(cmd) });
+    rows.push({ label: ct ? 'Reached Position' : 'Actual Position', today: fmt.position(act), yesterday: fmt.position(cmd - 15 * sign), avg7: fmt.position(cmd - 11 * sign) });
+    rows.push({ label: 'Position Error', today: fmt.percent(Math.abs(cmd - act)), yesterday: fmt.percent(15), avg7: fmt.percent(11) });
+    if (ct) rows.push({ label: 'Response Delay', today: fmt.seconds(ct.lastDelay), yesterday: fmt.seconds(0.6), avg7: fmt.seconds(0.5) });
   }
   if (componentId === 'ballValve') rows.push({ label: 'Closing Response Time', today: fmt.seconds(ballResponseTime()), yesterday: fmt.seconds(2.3), avg7: fmt.seconds(2.1) });
   rows.push({ label: 'Steam Flow', today: fmt.flow(S.steam.flow), yesterday: fmt.flow(jitter(healthyFlow, 0.012, 1.3)), avg7: fmt.flow(jitter(healthyFlow, 0.008, 2.1)) });
@@ -258,21 +303,55 @@ export function historicalComparison(componentId) {
   return rows;
 }
 
-/** Trend series for the analytics chart: live (last 60 / 10 min) or a simulated 24 h / 7 d historian with the anomaly onset. */
+/**
+ * V-Port 24 h operating story (SIMULATED historian, in hours before now): the command
+ * setpoint is changed a few times through the day and the actual position tracks it —
+ * except for two mismatch episodes: (1) an earlier one that recovered, (2) the current one.
+ * The last setpoint step is the live command; after the live onset the actual is the live value.
+ */
+export function vportDayStory(detectedAt = null) {
+  const v = S.vPortValve;
+  const now = Date.now(), H = 3600 * 1000;
+  const onset = detectedAt || now - 37 * 60 * 1000;
+  const lastStepAt = onset - 25 * 60 * 1000;                            // command stepped up ~25 min before the mismatch began
+  const steps = [                                                      // [time, command]
+    [now - 24 * H, 25], [now - 22 * H, 47], [now - 18.3 * H, 74], [now - 16.3 * H, 50], [now - 14.5 * H, 25],
+    [now - 11.7 * H, 58], [now - 9.5 * H, 25], [now - 6 * H, 40], [now - 4 * H, 47], [lastStepAt, v.commandPosition],
+  ];
+  const episodes = [
+    { n: 1, from: now - 17.3 * H, to: now - 16.3 * H, error: 15, label: 'Position mismatch (~15% error)' },
+    { n: 2, from: onset, to: null, error: Math.round(v.positionError), label: `Position mismatch (~${Math.round(v.positionError)}% error)` },
+  ];
+  return { steps, episodes, onset };
+}
+
+/** Trend series for the analytics chart: live (last 60 / 10 min) or a simulated 24 h / 7 d historian with the anomaly episodes. */
 export function trendSeries(range, detectedAt) {
   if (range === 'live' || range === '60m') return positionHistory.slice();
   if (range === '10m') { const from = Date.now() - 10 * 60 * 1000; return positionHistory.filter((p) => p.t >= from); }
   const now = Date.now();
-  const n = range === '7d' ? 168 : 144, stepMs = range === '7d' ? 3600 * 1000 : 10 * 60 * 1000;
-  const v = S.vPortValve; const healthyFlow = targetFlow();
+  const v = S.vPortValve;
+  const stepMs = range === '7d' ? 15 * 60 * 1000 : 5 * 60 * 1000;
+  const span = range === '7d' ? 7 * 24 * 3600 * 1000 : 24 * 3600 * 1000;
+  const { steps, episodes } = vportDayStory(detectedAt);
+  const tau = 6 * 60 * 1000;                                            // healthy tracking: ~6 min first-order lag
+  const cmdAt = (t) => { let c = steps[0][1]; for (const [ts, val] of steps) if (t >= ts) c = val; return c; };
   const out = [];
-  for (let i = n; i >= 0; i--) {
-    const t = now - i * stepMs;
-    const drift = Math.sin(i / 9) * 0.02 + Math.sin(i / 3.7) * 0.01;
-    const afterOnset = detectedAt && t >= detectedAt - stepMs;
-    out.push(afterOnset
-      ? { t, cmd: v.commandPosition, act: v.actualPosition, flow: S.steam.flow, expected: v.expectedFlow }
-      : { t, cmd: v.commandPosition, act: v.commandPosition + drift * 40, flow: healthyFlow * (1 + drift), expected: healthyFlow });
+  let act = cmdAt(now - span);
+  for (let t = now - span; t <= now; t += stepMs) {
+    const cmd = cmdAt(t);
+    // day-old repeats for the 7-day view: same daily pattern shifted by whole days
+    const dayShift = range === '7d' ? Math.floor((now - t) / (24 * 3600 * 1000)) * 24 * 3600 * 1000 : 0;
+    const cmdDay = range === '7d' ? cmdAt(t + dayShift) : cmd;
+    let target = cmdDay;
+    for (const e of episodes) { if (t >= e.from && (e.to == null || t < e.to)) target = e.to == null ? v.actualPosition : cmdDay - e.error; }
+    if (range === '7d' && dayShift > 0) target = cmdDay + Math.sin(t / 9e6) * 1.5;   // earlier days: healthy
+    act += (target - act) * (1 - Math.exp(-stepMs / tau));
+    if (t >= (episodes[1].from) && range !== '7d') act = v.actualPosition;
+    const noise = Math.sin(t / 7.3e5) * 0.6 + Math.sin(t / 2.1e5) * 0.3;
+    const a = Math.max(0, Math.min(100, act + (t >= episodes[1].from ? 0 : noise)));
+    const flow = Math.round(S.steam.maxFlow * a / 100), expected = Math.round(S.steam.maxFlow * (range === '7d' ? cmdDay : cmd) / 100);
+    out.push({ t, cmd: range === '7d' ? cmdDay : cmd, act: a, flow, expected });
   }
   return out;
 }

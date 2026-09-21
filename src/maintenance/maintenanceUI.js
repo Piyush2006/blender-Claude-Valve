@@ -74,9 +74,47 @@ export function createMaintenanceUI({ onOpenComponent }) {
         ${chartKind(componentId) === 'ballResponse' || chartKind(componentId) === 'esdResponse' || chartKind(componentId) === 'esdCycle' ? '<span class="mt-note">live samples</span>' : chartKind(componentId) === 'series' ? '<span class="mt-note">last 10 min</span>' : `<select data-range><option value="60m" ${view.range === '60m' ? 'selected' : ''}>Last 60 Minutes (live)</option><option value="24h" ${view.range === '24h' ? 'selected' : ''}>Last 24 Hours</option><option value="7d" ${view.range === '7d' ? 'selected' : ''}>Last 7 Days</option></select>`}</div>
         <div class="mt-legend">${chartKind(componentId) === 'position' ? `<span><i style="background:${CHART_COLORS.cmd}"></i>Commanded (%)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual (%)</span>` : chartKind(componentId) === 'ballResponse' || chartKind(componentId) === 'esdResponse' || chartKind(componentId) === 'esdCycle' ? `<span><i style="background:${CHART_COLORS.cmd}"></i>Command</span><span><i style="background:${CHART_COLORS.act}"></i>Actual state</span>` : chartKind(componentId) === 'series' ? (seriesChartFor(componentId)?.legend || []).map(([l, color]) => `<span><i style="background:${color}"></i>${esc(l)}</span>`).join('') : `<span><i style="background:${CHART_COLORS.flow}"></i>Steam flow (kg/h)</span><span><i style="background:${CHART_COLORS.expected}"></i>Expected</span>`}</div>
         <div data-chart></div>
-        <p class="mt-note">${chartKind(componentId) === 'ballResponse' || view.range === '60m' ? 'Live samples from the Twin.' : 'Simulated historian: healthy baseline before the anomaly onset, live values after.'}</p></div>
-      <div class="mt-section"><h4>Historical Comparison</h4><table class="mt-comp-table"><thead><tr><th>Parameter</th><th>Today</th><th>Yesterday</th><th>7-Day Avg</th></tr></thead><tbody data-comp>${rows.map((r) => `<tr><td>${esc(r.label)}</td><td class="today mono">${esc(r.today)}</td><td class="mono">${esc(r.yesterday)}</td><td class="mono">${esc(r.avg7)}</td></tr>`).join('')}</tbody></table><p class="mt-note">Yesterday and 7-day values are a simulated baseline (same units as the Twin).</p></div>`;
+</div>
+      <div class="mt-section"><h4>Historical Comparison</h4><table class="mt-comp-table"><thead><tr><th>Parameter</th><th>Today</th><th>Yesterday</th><th>7-Day Avg</th></tr></thead><tbody data-comp>${rows.map((r) => `<tr><td>${esc(r.label)}</td><td class="today mono">${esc(r.today)}</td><td class="mono">${esc(r.yesterday)}</td><td class="mono">${esc(r.avg7)}</td></tr>`).join('')}</tbody></table></div>`;
   }
+  /* ---- Oscillation (hunting) ticket: analytics of the incident itself, not the live trend ---- */
+  function oscillationSeries(t, centerAt, amplitude, freqHz, windowS = 60, noise = 0.25) {
+    const cmd = t.anomaly.measurements?.commandPosition ?? 70;
+    const out = [];
+    for (let s = -windowS / 2; s <= windowS / 2; s += 0.2) {
+      const tt = centerAt + s * 1000;
+      const act = cmd + amplitude * Math.sin(2 * Math.PI * freqHz * s) + noise * Math.sin(s * 3.7) + noise * 0.6 * Math.sin(s * 11.3);
+      out.push({ t: tt, cmd, act, flow: Math.round(S.steam.maxFlow * act / 100), expected: Math.round(S.steam.maxFlow * cmd / 100) });
+    }
+    return out;
+  }
+  function oscillationAnalyticsHtml(t) {
+    const swing = 12, freq = 0.5, crossings = 4, cmd = t.anomaly.measurements?.commandPosition ?? 70;
+    const repairedAt = t.resolution?.at || t.updatedAt;
+    return `<div class="mt-section"><h4>Oscillation at Detection <span class="mt-note">(${when(t.anomaly.detectedAt)})</span></h4><div class="mt-kv">${kv([
+        ['Commanded Position', fmt.position(cmd)], ['Actual Position', `${fmt.position(cmd - swing / 2)} – ${fmt.position(cmd + swing / 2)}`, 'bad'],
+        ['Peak-to-Peak Swing', fmt.percent(swing), 'bad'], ['Frequency', `${freq.toFixed(1)} Hz`], ['Crossings / 3 s', String(crossings), 'bad'], ['Limit', `swing > ${LIMITS_HUNTING.swing}% · ≥ ${LIMITS_HUNTING.crossings} crossings`]])}</div></div>
+      <div class="mt-section"><div class="mt-range"><h4 style="margin:0">Command vs Actual Position — during the incident</h4><span class="mt-note">60 s window at detection</span></div>
+        <div class="mt-legend"><span><i style="background:${CHART_COLORS.cmd}"></i>Commanded (%)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual (%)</span><span><i style="background:${CHART_COLORS.gap};border:1px solid rgba(220,38,38,0.4)"></i>Deviation</span></div>
+        <div data-chart-before></div></div>
+      <div class="mt-section"><div class="mt-range"><h4 style="margin:0">Command vs Actual Position — after repair</h4><span class="mt-note">60 s window at ${when(repairedAt)}</span></div>
+        <div class="mt-legend"><span><i style="background:${CHART_COLORS.cmd}"></i>Commanded (%)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual (%)</span></div>
+        <div data-chart-after></div></div>
+      <div class="mt-section"><h4>Comparison</h4><table class="mt-comp-table"><thead><tr><th>Parameter</th><th>At detection</th><th>After repair</th><th>7-Day Avg</th></tr></thead><tbody>${[
+        ['Peak-to-Peak Swing', fmt.percent(swing), fmt.percent(0.8), fmt.percent(1.0)],
+        ['Crossings / 3 s', String(crossings), '0', '0'],
+        ['Peak Position Error', fmt.percent(swing / 2), fmt.percent(0.4), fmt.percent(0.5)],
+        ['Steam Flow Variation', `± ${fmt.flow(Math.round(S.steam.maxFlow * swing / 200))}`, `± ${fmt.flow(50)}`, `± ${fmt.flow(60)}`],
+      ].map((r) => `<tr><td>${esc(r[0])}</td><td class="today mono">${esc(r[1])}</td><td class="mono">${esc(r[2])}</td><td class="mono">${esc(r[3])}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  function mountOscillationCharts(t) {
+    view.chart = null; view.chartKind = 'oscillation';
+    const before = bodyEl.querySelector('[data-chart-before]'), after = bodyEl.querySelector('[data-chart-after]');
+    if (before) createPositionChart(before, { height: 170 }).update(oscillationSeries(t, t.anomaly.detectedAt, 6, 0.5), { rangeMs: 60 * 1000, yRange: [50, 90] });
+    if (after) createPositionChart(after, { height: 130 }).update(oscillationSeries(t, (t.resolution?.at || t.updatedAt) + 60 * 1000, 0.4, 0.05, 60, 0.15), { rangeMs: 60 * 1000, yRange: [50, 90] });
+  }
+  const LIMITS_HUNTING = { swing: 4, crossings: 3 };
+
   function liveKv(componentId) {
     const v = S.vPortValve;
     if (componentId === 'vPortValve') {
@@ -123,19 +161,20 @@ export function createMaintenanceUI({ onOpenComponent }) {
     if (view.tab === 'details') {
       const idx = store.STATUS_FLOW.indexOf(t.status);
       html = `<div class="mt-flow">${store.STATUS_FLOW.map((s, i) => `<span class="st ${i < idx ? 'done' : i === idx ? 'now' : ''}" data-st="${s}">${s}</span>${i < store.STATUS_FLOW.length - 1 ? '<span class="arrow">→</span>' : ''}`).join('')}</div>
-        <div class="mt-section"><h4>Anomaly Snapshot <span class="mt-note">(captured ${when(t.anomaly.capturedAt)})</span></h4>
+        <div class="mt-section"><h4>Anomaly Snapshot</h4>
           <div class="mt-kv">${kv([['Detected', clock(t.anomaly.detectedAt)], ['Anomaly', ANOMALY_LABELS[t.type] || t.issue]].concat(t.anomaly.lines))}</div></div>
         <div class="mt-section"><h4>Description</h4><div class="mt-desc is-${t.anomaly.level}">${esc(t.description)}</div></div>
         ${t.resolution ? `<div class="mt-section"><h4>Resolution</h4><div class="mt-kv"><div><span>Root Cause</span><b style="font-family:inherit">${esc(t.resolution.rootCause)}</b></div><div><span>Corrective Action</span><b style="font-family:inherit">${esc(t.resolution.correctiveAction)}</b></div></div><p style="margin:6px 0 0">${esc(t.resolution.notes)}</p></div>` : ''}
-        <div class="mt-section"><h4>Current Component State <span class="mt-note">(live from the Twin)</span></h4>
-          <p style="margin:0 0 6px"><span class="mt-state-pill is-${liveLevel}">${liveLevel === 'normal' ? '🟢 NORMAL' : liveLevel === 'attention' ? '🟡 WARNING' : '🔴 ANOMALY'}</span> ${liveLevel === 'normal' ? 'values are within normal range' : 'the flagged condition is still present'}</p>
+        <div class="mt-section"><h4>Current Component State</h4>
+          <p style="margin:0 0 6px"><span class="mt-state-pill is-${liveLevel}">${liveLevel === 'normal' ? '🟢 NORMAL' : liveLevel === 'attention' ? '🟡 WARNING' : '🔴 ANOMALY'}</span></p>
           <div class="mt-kv" data-live-values>${kv(store.liveValuesFor(t.componentId))}</div>
           ${t.status === 'IN PROGRESS' ? `<p class="mt-note">Perform the repair in the Twin (Anomaly Simulation → Normal, or correct the actual position), then mark the ticket resolved.</p>` : ''}
           ${t.status === 'RESOLVED' && !live.normal ? `<p class="mt-note" style="color:var(--warn)">Component is not yet NORMAL in the Twin — verify before closing.</p>` : ''}
           ${t.verification ? `<p class="mt-note">Verified ${t.verification.normal ? 'NORMAL' : t.verification.status} at ${when(t.verification.at)}.</p>` : ''}</div>`;
       if (force) setHtml(bodyEl, html); else { const host = bodyEl.querySelector('[data-live-values]'); if (host) setHtml(host, kv(store.liveValuesFor(t.componentId))); const pill = bodyEl.querySelector('.mt-state-pill'); if (pill && !pill.classList.contains(`is-${liveLevel}`)) render(true); }
     } else if (view.tab === 'analytics') {
-      if (force) { setHtml(bodyEl, analyticsHtml(t.componentId, t.anomaly.detectedAt)); mountChart(t.componentId, t.anomaly.detectedAt); }
+      if (t.type === 'VPORT_HUNTING') { if (force) { setHtml(bodyEl, oscillationAnalyticsHtml(t)); mountOscillationCharts(t); } }
+      else if (force) { setHtml(bodyEl, analyticsHtml(t.componentId, t.anomaly.detectedAt)); mountChart(t.componentId, t.anomaly.detectedAt); }
       else updateAnalytics(t.componentId, t.anomaly.detectedAt);
     } else {
       html = `<div class="mt-section"><h4>Activity Log</h4>${timeline(t.activity)}</div>`;
@@ -231,7 +270,7 @@ export function createMaintenanceUI({ onOpenComponent }) {
     m.querySelector('[data-m="openmail"]')?.addEventListener('click', openTicket);
   }
   function emailHtml(email) {
-    return `<div class="mt-email"><div class="hd">✉ SIMULATED EMAIL <span class="mt-note" style="font-weight:500;letter-spacing:0">(no message is actually sent)</span></div>
+    return `<div class="mt-email"><div class="hd">✉ SIMULATED EMAIL </div>
       <div class="row"><span>TO</span><div>${esc(email.to)}</div></div><div class="row"><span>SUBJECT</span><div>${esc(email.subject)}</div></div>
       <pre>${esc(email.body)}</pre><div class="foot"><button class="btn btn-primary" type="button" data-m="openmail">OPEN TICKET</button></div></div>`;
   }
@@ -252,7 +291,7 @@ export function createMaintenanceUI({ onOpenComponent }) {
         <label class="full">Root Cause<select name="root">${kb.rootCauses.map((c) => `<option>${esc(c)}</option>`).join('')}<option>Other</option></select></label>
         <label class="full">Corrective Action<input name="action" placeholder="e.g. Recalibrated positioner and verified stroke" value="${esc(kb.recommendations[0] || '')}"></label>
         <label class="full">Resolution Notes<textarea name="notes" placeholder="What was found and what was done"></textarea></label>
-      </div><p class="mt-note">After resolving, the ticket keeps monitoring the component; close it once the Twin shows NORMAL.</p>`,
+      </div>`,
       `<button class="btn" type="button" data-m="close">CANCEL</button><button class="btn btn-primary" type="button" data-m="submit">MARK RESOLVED</button>`);
     m.querySelector('[data-m="submit"]').addEventListener('click', () => {
       const f = (n) => m.querySelector(`[name="${n}"]`).value.trim();

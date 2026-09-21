@@ -115,7 +115,7 @@ function statusRows() {
   if (esd.sim.anomaly === 'lowAirPressure') { esdRow.param = 'Air Pressure'; esdRow.value = `${fmt.pressure(esd.sim.airPressure)} (min ${fmt.pressure(esd.sim.minAirPressure)})`; esdRow.notes = `State ${esdStateText()}`; }
   if (flagged('esdValve')) esdRow.notes += ` · ${flagged('esdValve')}`;
   esdRow.state = title(esdStateText());
-  if (esd.sim.anomaly === 'cyclicDegradation' && esd.cycleTest) esdRow.state = `${title(esdStateText())} · cycle ${esd.cycleTest.current}/${esd.cycleTest.total} · delay ${fmt.seconds(esd.cycleTest.lastDelay)}`;
+  if (esd.sim.anomaly === 'cyclicDegradation' && esd.cycleTest && flagged('esdValve')) { const ct = esd.cycleTest; esdRow.state = ct.active ? `${title(esdStateText())} · cycle ${ct.current}/${ct.total} · response ${fmt.seconds(ct.lastDelay)}` : `${title(esdStateText())} · response ${fmt.seconds(ct.lastDelay)}`; esdRow.short = 'Slow Response'; }
   if (esd.sim.anomaly === 'lowAirPressure' && flagged('esdValve')) esdRow.state = `${title(esdStateText())} · air ${fmt.pressure(esd.sim.airPressure)}`;
 
   // V-Port — control valve: position error, or flow deviation for trim wear.
@@ -232,7 +232,7 @@ export function anomalyEntry(a, ctx = null) {
 
 function subtitleFor(type) {
   switch (type) {
-    case 'VPORT_POSITION_MISMATCH': return 'Actual position below command';
+    case 'VPORT_POSITION_MISMATCH': { const v = S.vPortValve; return `Actual position is not tracking commanded position. Deviation: ${Math.round(v.positionError)}% (${Math.round(v.commandPosition)}% cmd / ${Math.round(v.actualPosition)}% act).`; }
     case 'VPORT_STICKING': return 'Valve not moving on command';
     case 'VPORT_SLOW_RESPONSE': return 'Valve reaches command too slowly';
     case 'VPORT_HUNTING': return 'Position oscillating around command';
@@ -245,7 +245,7 @@ function subtitleFor(type) {
     case 'ESD_SLOW_SHUTDOWN': return 'Shutdown slower than acceptable';
     case 'ESD_PARTIAL_CLOSURE': return 'Valve stopped part-way on trip';
     case 'ESD_LOW_AIR': return 'Instrument air below minimum';
-    case 'ESD_RESPONSE_DEGRADATION': return 'Valve response time is increasing over multiple cycles';
+    case 'ESD_RESPONSE_DEGRADATION': return 'Valve response time is increasing over repeated cycles.';
     case 'PSV_UNEXPECTED_OPENING': return 'Lifting below set pressure';
     case 'PSV_FAILURE_TO_OPEN': return 'Pressure above set, valve closed';
     case 'PSV_CHATTERING': return 'Rapid open / close cycling';
@@ -267,7 +267,7 @@ function impactFor(type) {
     case 'VPORT_HUNTING': return 'Oscillating steam flow — cyclic drying variation';
     case 'ESD_FAIL_TO_CLOSE': case 'ESD_PARTIAL_CLOSURE': case 'ESD_LOW_AIR': return 'Steam isolation not guaranteed on shutdown demand';
     case 'ESD_SLOW_SHUTDOWN': return 'Delayed steam isolation on trip';
-    case 'ESD_RESPONSE_DEGRADATION': return 'Steam isolation is getting slower with every cycle — trip response no longer guaranteed';
+    case 'ESD_RESPONSE_DEGRADATION': return 'Valve response time is increasing over multiple cycles';
     case 'BALL_FAIL_TO_OPEN': return 'No steam to the Yankee — production impact';
     case 'BALL_FAIL_TO_CLOSE': case 'BALL_PASSING': return 'Steam line cannot be fully isolated';
     case 'BALL_SLOW_OPERATION': return 'Steam isolation is delayed — the valve takes longer than expected to close';

@@ -6,15 +6,15 @@ import * as store from './ticketStore.js';
  */
 export function createMaintenanceView(container, { onOpenTicket, onBack }) {
   const dateFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-  const filters = { status: 'ACTIVE', priority: '', assignee: '', q: '' };
+  const filters = { status: '', priority: '', assignee: '', q: '' };
 
   container.innerHTML = `
     <div class="mt-wrap">
       <section class="mt-summary" id="mt-summary"></section>
       <section class="card">
-        <div class="card-head"><div><h2>Maintenance Tickets</h2><p class="card-sub">Tickets raised from Twin anomalies · local demo workflow (no CMMS connection)</p></div><button class="btn" type="button" id="mt-back">← Back to Dashboard</button></div>
+        <div class="card-head"><div><h2>Maintenance Tickets</h2></div><button class="btn" type="button" id="mt-back">← Back to Dashboard</button></div>
         <div class="mt-filters">
-          <label>Status <select data-f="status"><option value="ACTIVE">Active (not closed)</option><option value="">All</option>${store.STATUS_FLOW.map((s) => `<option value="${s}">${s}</option>`).join('')}</select></label>
+          <label>Status <select data-f="status"><option value="">All</option><option value="ACTIVE">Active (not closed)</option>${store.STATUS_FLOW.map((s) => `<option value="${s}">${s}</option>`).join('')}</select></label>
           <label>Priority <select data-f="priority"><option value="">All</option>${store.PRIORITIES.map((p) => `<option value="${p}">${p}</option>`).join('')}</select></label>
           <label>Assigned To <select data-f="assignee"><option value="">All</option><option value="__none">Unassigned</option>${store.USERS.map((u) => `<option value="${u.id}">${u.name}</option>`).join('')}</select></label>
           <span class="spacer"></span>

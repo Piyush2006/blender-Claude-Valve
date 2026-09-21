@@ -150,11 +150,12 @@ rpm) via `units.js`. There are no generic KPI cards.
   Closed, Closing Slowly, Fail to Close…), the V-Port shows `70% cmd / 32% act`.
 * Component detail (inline under the expanded row): header (component — anomaly, CRITICAL / WARNING, subtitle, first
   detected, duration, **View in Twin**, **Create Ticket**, ⋯ menu) and tabs Overview /
-  Analytics / Possible Causes / Recommendations / Activity.
+  Analytics / Possible Causes / Recommendations / Activity. Overview tabs carry the metric
+  cards, the impact strip and the historical summary; all charts live on the Analytics tab.
   * V-Port position mismatch: commanded, actual, position error, steam flow (▼ % vs command),
-    expected at command, expected at actual (✓ matches); *Command vs Actual Position* chart
-    (blue command, green actual, red-shaded gap) with a range selector; *Position Error —
-    Historical* (today live; yesterday / 7-day simulated) with a trend.
+    expected at command, expected at actual (✓ matches); Analytics: *Response per Command
+    Cycle* (delay bars with stage bands and the acceptable limit) and *Command vs Actual
+    Position — 15 Cycles*; *Position Error — Historical* (today live; yesterday / 7-day simulated).
   * Ball valve slow response: command, actual, response time, expected (< acceptable),
     response deviation, current valve state — never a percentage; *Ball Valve Open/Close
     Response* chart (command step first, actual lags, amber lag shading, "expected < 2 s"
@@ -181,11 +182,11 @@ anomaly (the one driven by the Anomaly Simulation panel, else the worst active o
 panels behave exactly as before; the Anomaly Simulation tab still runs one scenario at a time.
 
 `demoScenario.js` loads the demo at start-up: V-Port position mismatch (70 % commanded /
-32 % actual, CRITICAL) plus a ball valve **stroke test** with a slow actuator — CLOSE command,
-8.5 s to reach CLOSED (expected < 2 s), held closed, then re-opened so steam returns to the
-Yankee; the slow-response verdict stays latched (WARNING) and the dashboard reports the closing
-stroke (CLOSE → CLOSED, 8.5 s). A completed 15-cycle ESD response test (~22 min ago) is seeded
-for the ESD analytics panel; the ESD itself is NORMAL at boot. Any operator action on the ball valve or the Anomaly Simulation
+32 % actual, detected 37 min ago, CRITICAL; the position trend shows the drop at the onset)
+plus **ESD Slow Response**: a completed 15-cycle ON/OFF duty-cycle test
+(5 s per state, ~22 min ago) whose actual state lagged the command by 0.5 s → 1–2 s → 2–3 s →
+4–5 s; the verdict stays latched (WARNING, current response 5.0 s vs < 2.0 s) and the valve is
+OPEN again. The ball valve is NORMAL / OPEN. Any operator action on the ball valve or the Anomaly Simulation
 panel takes over from the sequencer.
 
 ## Anomaly Simulation (all components)
@@ -214,7 +215,8 @@ the 2 s persistence timer; catalog severity decides ANOMALY (red) vs WARNING (am
 | Steam trap | Blocked | outlet 45 °C, no discharge, check valve seats | outlet < 60 °C & no flow |
 | Steam trap | Poor Removal | outlet ~75 °C, discharge ×0.5 | 60–85 °C (WARNING) |
 | Check valve | Reverse Flow | reverse ΔP, disc near seat, reverse flow, 3D + schematic arrows flip | flow < 0 |
-| ESD | Cyclic Response Degradation | ON/OFF duty cycle (command flips every 5 s, 10–15 cycles); response dead time grows 0.5 s → 1–2 s → 2–3 s → 4–5 s; steam isolated while CLOSED, ball valve and V-Port untouched | delay > acceptable (1 s) from cycle 4 → WARNING; record kept in `esdValve.cycleTest` for the analytics chart (command vs actual, cycle markers C1…C15, summary, stages NORMAL → SLIGHT DELAY → DEGRADING → SLOW RESPONSE) |
+| V-Port | Position Mismatch (cyclic test) | command steps 30 % ↔ 70 % every 5 s for 15 cycles; response dead time grows 0.5 s → 5 s and from cycle 12 the valve loses stroke authority (reaches 55 → 45 → 38 → 32 %) | delay > acceptable → SLOW RESPONSE, then |cmd − act| > 10 % → POSITION MISMATCH (CRITICAL); record in `vPortValve.cycleTest` drives the per-cycle delay chart and the command-vs-actual cycle chart |
+| ESD | Slow Response (cyclic test) | ON/OFF duty cycle (command flips every 5 s, 10–15 cycles); response dead time grows 0.5 s → 1–2 s → 2–3 s → 4–5 s; steam isolated while CLOSED, ball valve and V-Port untouched | delay > acceptable (1 s) from cycle 4 → WARNING; record kept in `esdValve.cycleTest` for the analytics chart (command vs actual, cycle markers C1…C15, summary, stages NORMAL → SLIGHT DELAY → DEGRADING → SLOW RESPONSE) |
 | Check valve | Failure to Open | forward ΔP, disc stuck seated, no flow | ΔP > 0 & seated |
 | Check valve | Failure to Close | reverse ΔP, disc stuck open, full reverse flow | ΔP < 0 & open |
 

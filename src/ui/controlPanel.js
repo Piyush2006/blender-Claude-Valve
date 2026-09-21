@@ -135,6 +135,16 @@ export function createControlPanel(container, { cameraRig, onValveXray }) {
             <input id="vport-acc" type="range" min="1" max="10" step="0.5" />
           </label>
 
+          <label class="slider-label" data-modes="cyclicDegradation">Command Cycle <b class="mono" id="vport-cyc-period-val"></b>
+            <input id="vport-cyc-period" type="range" min="5" max="60" step="5" />
+          </label>
+          <label class="slider-label" data-modes="cyclicDegradation">Cycles <b class="mono" id="vport-cyc-count-val"></b>
+            <input id="vport-cyc-count" type="range" min="10" max="60" step="5" />
+          </label>
+          <label class="slider-label" data-modes="cyclicDegradation">Acceptable Delay <b class="mono" id="vport-cyc-acc-val"></b>
+            <input id="vport-cyc-acc" type="range" min="0.5" max="3" step="0.5" />
+          </label>
+          <div class="kv" data-modes="cyclicDegradation"><div><span>Cycle</span><b id="vport-cyc-now" class="mono"></b></div><div><span>Response Delay</span><b id="vport-cyc-delay" class="mono"></b></div><div><span>Reachable</span><b id="vport-cyc-ceiling" class="mono"></b></div></div>
           <label class="slider-label" data-modes="hunting">Oscillation Amplitude <b class="mono" id="vport-amp-val"></b>
             <input id="vport-amp" type="range" min="0" max="20" step="1" />
           </label>
@@ -143,8 +153,8 @@ export function createControlPanel(container, { cameraRig, onValveXray }) {
           </label>
 
           <div class="kv">
-            <div data-modes="normal slowResponse hunting trimWear"><span>Actual Position</span><b id="vport-act-ro" class="mono"></b></div>
-            <div data-modes="normal positionMismatch slowResponse hunting"><span>Position Error</span><b id="vport-err" class="mono"></b></div>
+            <div data-modes="normal slowResponse hunting trimWear cyclicDegradation"><span>Actual Position</span><b id="vport-act-ro" class="mono"></b></div>
+            <div data-modes="normal positionMismatch slowResponse hunting cyclicDegradation"><span>Position Error</span><b id="vport-err" class="mono"></b></div>
             <div data-modes="sticking"><span>Sticking Status</span><b id="vport-stick-status" class="mono"></b></div>
             <div data-modes="trimWear"><span>Expected Flow</span><b id="vport-expected" class="mono"></b></div>
             <div><span id="vport-flow-label">Steam Flow</span><b id="vport-flow" class="mono"></b></div>
@@ -333,6 +343,9 @@ export function createControlPanel(container, { cameraRig, onValveXray }) {
   const health = bindParam('vport-health', 'trimWear', 'health');
   const rt = bindParam('vport-rt', 'slowResponse', 'responseTime');
   const acc = bindParam('vport-acc', 'slowResponse', 'acceptableTime');
+  const cycPeriod = bindParam('vport-cyc-period', 'cyclic', 'period');
+  const cycCount = bindParam('vport-cyc-count', 'cyclic', 'count');
+  const cycAcc = bindParam('vport-cyc-acc', 'cyclic', 'acceptableDelay');
   const amp = bindParam('vport-amp', 'hunting', 'amplitude');
   const freq = bindParam('vport-freq', 'hunting', 'frequency');
   const simInputs = [...container.querySelectorAll('[data-sim]')].map((el) => {
@@ -422,6 +435,11 @@ export function createControlPanel(container, { cameraRig, onValveXray }) {
     setText($$['vport-health-val'], fmt.percent(v.sim.trimWear.health));
     setText($$['vport-wear'], fmt.percent(100 - v.sim.trimWear.health));
     setText($$['vport-rt-val'], fmt.seconds(v.sim.slowResponse.responseTime, 0));
+    syncParam(cycPeriod, v.sim.cyclic.period); syncParam(cycCount, v.sim.cyclic.count); syncParam(cycAcc, v.sim.cyclic.acceptableDelay);
+    setText($$['vport-cyc-period-val'], `${v.sim.cyclic.period} s per step (${v.sim.cyclic.lo}% ↔ ${v.sim.cyclic.hi}%)`);
+    setText($$['vport-cyc-count-val'], String(v.sim.cyclic.count));
+    setText($$['vport-cyc-acc-val'], fmt.seconds(v.sim.cyclic.acceptableDelay));
+    { const ct = v.cycleTest; setText($$['vport-cyc-now'], ct ? `${ct.current} / ${ct.total}${ct.active ? '' : ' · done'}` : '—'); setText($$['vport-cyc-delay'], ct && ct.current ? `${fmt.seconds(ct.lastDelay)} · ${esdCycleStage(ct.lastDelay, v.sim.cyclic)}` : '—'); setText($$['vport-cyc-ceiling'], ct ? fmt.position(Math.min(100, ct.ceiling)) : '—'); }
     setText($$['vport-acc-val'], fmt.seconds(v.sim.slowResponse.acceptableTime));
     setText($$['vport-amp-val'], `±${fmt.percent(v.sim.hunting.amplitude)}`);
     setText($$['vport-freq-val'], `${v.sim.hunting.frequency.toFixed(1)} Hz`);

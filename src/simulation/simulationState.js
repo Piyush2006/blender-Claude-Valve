@@ -7,7 +7,7 @@
 /** Default anomaly-simulation parameters per component (RESET restores these). */
 export const DEFAULT_SIMS = {
   esdValve: () => ({ anomaly: 'normal', shutdownTime: 6, acceptableTime: 3, partialOpen: 30, airPressure: 5.5, minAirPressure: 4.0, tripElapsed: 0, tripping: false, lastTripDuration: 0, velocity: 0,
-    cyclePeriod: 5, cycleCount: 15, acceptableDelay: 1.0, delayInitial: 0.5, delayFinal: 5.0 }),   // cyclic response test
+    cyclePeriod: 5, cycleCount: 15, acceptableDelay: 2.0, delayInitial: 0.5, delayFinal: 5.0 }),   // cyclic response test
   ballValve: () => ({ anomaly: 'normal', operationTime: 12, acceptableTime: 5, leakage: 230, moveElapsed: 0, moving: false, lastMoveDuration: 0, lastCloseDuration: 0, lastOpenDuration: 0 }),
   safetyValve: () => ({ anomaly: 'normal', linePressure: 8.5, valveOpen: false, openCount: 0, openings: [], reliefCapacity: 1300 }),
   steamTrap: () => ({ anomaly: 'normal', inletTemp: 172, outletTemp: 98, pressure: 7.0 }),
@@ -50,7 +50,11 @@ export const simulationState = {
       slowResponse: { responseTime: 8, acceptableTime: 4, moveElapsed: 0, moving: false, lastMoveDuration: 0 },
       hunting: { amplitude: 6, frequency: 0.5 },
       trimWear: { health: 100, multiplier: 1 },
+      // Cyclic command test: command steps hi ↔ lo every `period` s for `count` cycles; the response
+      // delay grows cycle by cycle and, in the last cycles, the valve no longer reaches the command.
+      cyclic: { period: 30, count: 45, hi: 70, lo: 30, acceptableDelay: 1.0, delayInitial: 0.5, delayFinal: 5.0, finalActual: 32 },
     },
+    cycleTest: null,       // record of the last cyclic command test (see simulationEngine.js), kept for analytics
   },
   safetyValve: {
     setPressure: 10.0,   // bar(g)
@@ -176,6 +180,7 @@ export const VPORT_MODES = [
   { id: 'slowResponse', label: 'Slow Response' },
   { id: 'hunting', label: 'Hunting / Oscillation' },
   { id: 'trimWear', label: 'Trim Wear' },
+  { id: 'cyclicDegradation', label: 'Position Mismatch (cyclic test)' },
 ];
 
 /** Select the V-Port anomaly scenario; values are reset so each scenario starts clean. */
@@ -283,6 +288,8 @@ export function resetVPortSimulation(mode = 'normal') {
   Object.assign(v.sim.slowResponse, { responseTime: 8, acceptableTime: 4, moveElapsed: 0, moving: false, lastMoveDuration: 0 });
   Object.assign(v.sim.hunting, { amplitude: 6, frequency: 0.5 });
   Object.assign(v.sim.trimWear, { health: 100, multiplier: 1 });
+  Object.assign(v.sim.cyclic, { period: 30, count: 45, hi: 70, lo: 30, acceptableDelay: 1.0, delayInitial: 0.5, delayFinal: 5.0, finalActual: 32 });
+  v.cycleTest = null;                       // a fresh cyclic test starts on the next tick when that mode is selected
   Object.assign(simulationState.anomaly, { active: false, status: 'NORMAL', type: null, persistenceTime: 0, detail: '' });
   notify();
 }

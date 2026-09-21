@@ -118,13 +118,13 @@ export function overviewMetrics(entry) {
     const bad = k.currentDelay > k.acceptable;
     return [
       [
-        { label: 'Command Cycle', value: `${k.period} sec`, sub: 'ON / OFF' },
+        { label: 'Command Cycle', value: `${k.period} sec`, sub: `${k.period} sec ON / ${k.period} sec OFF` },
         { label: 'Cycles Analyzed', value: String(k.current), sub: `~${Math.round(k.durationS)} seconds${k.active ? ' · running' : ''}` },
         { label: 'Initial Response', value: `${k.initial.toFixed(1)} sec`, sub: 'Cycles 1–3', tone: 'normal' },
       ],
       [
         { label: 'Current Response', value: `${k.currentDelay.toFixed(1)} sec`, sub: k.lastRange, tone: bad ? 'attention' : 'normal' },
-        { label: 'Status', value: k.trend === 'Degrading' ? 'Degrading' : 'Stable', sub: k.stage.toLowerCase(), tone: k.trend === 'Degrading' ? 'attention' : 'normal' },
+        { label: 'Status', value: k.trend === 'Degrading' ? 'DEGRADING' : 'STABLE', sub: k.stage.toLowerCase(), tone: k.trend === 'Degrading' ? 'attention' : 'normal' },
         { label: 'Valve State', value: esdStateText(), sub: 'current' },
       ],
     ];
@@ -161,11 +161,28 @@ export function esdCycleSummary() {
   return { period: ct.period, total: ct.total, current: ct.current, active: ct.active, durationS: 2 * ct.period * ct.total, initial, currentDelay: current, stage, trend, acceptable: e.sim.acceptableDelay, cycles: ct.cycles, lastRange: `Cycles ${Math.max(1, ct.current - 3)}–${ct.current}` };
 }
 
+/** Summary of the V-Port cyclic command test (null when none recorded). */
+export function vportCycleSummary() {
+  const v = S.vPortValve, ct = v.cycleTest, c = v.sim.cyclic;
+  if (!ct) return null;
+  const first = ct.cycles.slice(0, 3);
+  const avg = (arr) => (arr.length ? arr.reduce((a, x) => a + x.delay, 0) / arr.length : 0);
+  const initial = avg(first) || c.delayInitial, current = ct.lastDelay || c.delayInitial;
+  const stalledFrom = ct.cycles.find((cy) => cy.shortfall > 0)?.index || null;
+  return { period: ct.period, total: ct.total, current: ct.current, active: ct.active, hi: c.hi, lo: c.lo, initial, currentDelay: current, acceptable: c.acceptableDelay, stalledFrom, ceiling: ct.ceiling, cycles: ct.cycles,
+    stageOf: (cy) => (cy.shortfall > 0 ? 'MISMATCH' : esdCycleStage(cy.delay, c)) };
+}
+
 /** Compact impact banner text. */
 export function impactText(entry) {
   if (!entry) return '';
-  if (entry.type === 'ESD_RESPONSE_DEGRADATION') return 'Valve response time is increasing over multiple cycles — steam isolation on a real trip would be delayed.';
-  if (entry.componentId === 'vPortValve' && entry.type !== 'VPORT_TRIM_WEAR') return 'Steam flow is significantly below expected flow and may affect Yankee drying performance.';
+  if (entry.type === 'ESD_RESPONSE_DEGRADATION') return 'Valve response time is increasing over multiple cycles.';
+  if (entry.componentId === 'vPortValve' && entry.type !== 'VPORT_TRIM_WEAR') {
+    const k = vportCycleSummary();
+    if (k && k.stalledFrom) return `Response delay has grown from ${k.initial.toFixed(1)} s to ${k.currentDelay.toFixed(1)} s over ${k.current} command cycles (${Math.round(k.current * 2 * k.period / 60)} min); since cycle ${k.stalledFrom} the valve no longer reaches the commanded position (currently ${fmt.position(k.ceiling)} reachable of ${fmt.position(k.hi)}). Steam flow is significantly below expected and may affect Yankee drying performance.`;
+    if (k) return `Response delay has grown from ${k.initial.toFixed(1)} s to ${k.currentDelay.toFixed(1)} s over ${k.current} command cycles (${Math.round(k.current * 2 * k.period / 60)} min) and is still increasing.`;
+    return 'Steam flow is significantly below expected flow and may affect Yankee drying performance.';
+  }
   return `${entry.impact}.`;
 }
 
@@ -178,9 +195,10 @@ export function impactText(entry) {
 export function historicalFor(entry) {
   const componentId = entry?.componentId;
   if (componentId === 'vPortValve') {
-    const today = S.vPortValve.positionError;
-    const rows = [['Today', fmt.percent(today), today > THRESHOLDS.positionErrorWarning ? 'critical' : 'normal'], ['Yesterday', fmt.percent(18), 'attention'], ['7-Day Average', fmt.percent(11), 'attention']];
-    return { title: 'Position Error — Historical', rows, trend: trendOf(today, 18) };
+    const ct = S.vPortValve.cycleTest;
+    const today = ct ? Math.max(S.vPortValve.positionError, S.vPortValve.sim.cyclic.hi - ct.ceiling) : S.vPortValve.positionError;
+    const rows = [['Today', fmt.percent(today), today > THRESHOLDS.positionErrorWarning ? 'critical' : 'normal'], ['Yesterday', fmt.percent(15), 'attention'], ['7-Day Average', fmt.percent(11), 'attention']];
+    return { title: 'Position Error — Historical', rows, trend: trendOf(today, 15) };
   }
   if (componentId === 'ballValve') {
     const today = ballResponseTime(), acc = S.ballValve.sim.acceptableTime;
@@ -197,8 +215,8 @@ export function historicalFor(entry) {
   }
   if (componentId === 'esdValve' && S.esdValve.cycleTest) {
     const k = esdCycleSummary();
-    const rows = [['Today', fmt.seconds(k.currentDelay), k.currentDelay > k.acceptable ? 'attention' : 'normal'], ['Yesterday', fmt.seconds(0.6), 'normal'], ['7-Day Average', fmt.seconds(0.5), 'normal'], ['Acceptable', `< ${fmt.seconds(k.acceptable)}`, 'muted']];
-    return { title: 'ESD Response Delay', rows, trend: trendOf(k.currentDelay, 0.6) };
+    const rows = [['Today', fmt.seconds(k.currentDelay), k.currentDelay > k.acceptable ? 'attention' : 'normal'], ['Yesterday', fmt.seconds(0.8), 'normal'], ['7-Day Average', fmt.seconds(0.5), 'normal'], ['Acceptable', `< ${fmt.seconds(k.acceptable)}`, 'muted']];
+    return { title: 'ESD Response Delay', rows, trend: trendOf(k.currentDelay, 0.8) };
   }
   if (componentId === 'esdValve') {
     const sim = S.esdValve.sim; const t = sim.tripping ? sim.tripElapsed : sim.lastTripDuration || 0;

@@ -91,23 +91,26 @@ export function createSchematic(container, { onSelect }) {
   return {
     /** statuses: { id → { level: 'normal'|'attention'|'critical', text } } ; supply: string */
     update(statuses, supplyText, reverseCondensate = false, { selectedId = null, live = null } = {}) {
+      // Every write is guarded so an unchanged frame touches nothing (no DOM churn / repaint).
+      const text = (el, v) => { if (el.textContent !== v) el.textContent = v; };
+      const attr = (el, k, v) => { if (el.getAttribute(k) !== v) el.setAttribute(k, v); };
       const ar = svg.querySelector('#sch-cond-arrow');
-      ar.setAttribute('transform', reverseCondensate ? `translate(${968 * 2 - 18},0) scale(-1,1)` : '');
+      attr(ar, 'transform', reverseCondensate ? `translate(${968 * 2 - 18},0) scale(-1,1)` : '');
       ar.classList.toggle('is-reverse', reverseCondensate);
-      svg.querySelector('#sch-cond-label').textContent = reverseCondensate ? 'REVERSE FLOW ◀' : 'Condensate Return';
+      text(svg.querySelector('#sch-cond-label'), reverseCondensate ? 'REVERSE FLOW ◀' : 'Condensate Return');
       for (const [id, { g, dot, st }] of nodeEls) {
         const s = statuses[id];
         if (!s) continue;
-        g.dataset.level = s.level;
-        dot.setAttribute('class', `sch-dot is-${s.level}`);
-        st.textContent = s.text;
+        if (g.dataset.level !== s.level) g.dataset.level = s.level;
+        attr(dot, 'class', `sch-dot is-${s.level}`);
+        text(st, s.text);
         g.classList.toggle('is-selected', id === selectedId);
       }
-      svg.querySelector('#sch-supply').textContent = supplyText;
+      text(svg.querySelector('#sch-supply'), supplyText);
       if (live) {
-        const f = svg.querySelector('#sch-flow'); f.textContent = live.flow; f.setAttribute('class', `sch-label mono ${live.flowTone ? `tone-${live.flowTone}` : ''}`);
-        const m = svg.querySelector('#sch-moist'); m.textContent = `${live.moisture} · ${live.moistureTarget}`; m.setAttribute('class', `sch-label mono ${live.moistureTone ? `tone-${live.moistureTone}` : ''}`);
-        svg.querySelector('#sch-cond-temp').textContent = live.condensateTemp;
+        const f = svg.querySelector('#sch-flow'); text(f, live.flow); attr(f, 'class', `sch-label mono ${live.flowTone ? `tone-${live.flowTone}` : ''}`);
+        const m = svg.querySelector('#sch-moist'); text(m, `${live.moisture} · ${live.moistureTarget}`); attr(m, 'class', `sch-label mono ${live.moistureTone ? `tone-${live.moistureTone}` : ''}`);
+        text(svg.querySelector('#sch-cond-temp'), live.condensateTemp);
       }
     },
   };

@@ -5,7 +5,7 @@ import { simulationState as S, subscribe } from '../simulation/simulationState.j
  * value — just samples over time, for the analytics charts):
  *
  *   positionHistory — V-Port commanded / actual position + steam flow, every 1 s, last 60 min
- *   ballHistory     — ball valve command / position every 0.2 s of SIMULATION time, last 25 min
+ *   ballHistory     — ball valve command / position every 0.2 s of SIMULATION time, last 45 min
  *                     (deterministic; fine enough to show a stroke that takes a few seconds).
  *                     Samples carry `st` (sim seconds); ballSamplesWallClock() maps them to wall time.
  *   processHistory  — ESD command/position, safety-valve line/set pressure + lift, trap inlet/outlet,
@@ -15,8 +15,9 @@ import { simulationState as S, subscribe } from '../simulation/simulationState.j
 export const positionHistory = [];
 export const ballHistory = [];
 export const processHistory = [];
-export const esdHistory = [];                    // { st, cmd, pos } every 0.2 s of sim time, last 25 min
-let lastEsdSim = -1;
+export const esdHistory = [];                    // { st, cmd, pos } every 0.2 s of sim time, last 45 min
+export const vportHistory = [];                  // { st, cmd, act } every 0.2 s of sim time, last 45 min (cyclic test chart)
+let lastEsdSim = -1, lastVportSim = -1;
 const PROC_EVERY_S = 0.5, PROC_WINDOW_S = 10 * 60;
 let lastProcSim = -1;
 /**
@@ -40,7 +41,7 @@ function processSample(st, i = 0) {
   };
 }
 const POS_EVERY = 1000, POS_WINDOW = 60 * 60 * 1000;
-const BALL_EVERY_S = 0.2, BALL_WINDOW_S = 25 * 60;
+const BALL_EVERY_S = 0.2, BALL_WINDOW_S = 45 * 60;
 let lastPos = 0, lastBallSim = -1;
 
 { // same-spacing backfill at the current operating point so the charts open with context
@@ -49,6 +50,7 @@ let lastPos = 0, lastBallSim = -1;
   for (let i = 60 / BALL_EVERY_S; i > 0; i--) ballHistory.push({ st: S.time - i * BALL_EVERY_S, cmd: S.ballValve.command, pos: S.ballValve.position });
   for (let i = PROC_WINDOW_S / PROC_EVERY_S; i > 0; i--) processHistory.push(processSample(S.time - i * PROC_EVERY_S, i));
   for (let i = 60 / BALL_EVERY_S; i > 0; i--) esdHistory.push({ st: S.time - i * BALL_EVERY_S, cmd: S.esdValve.command, pos: S.esdValve.position });
+  for (let i = 60 / BALL_EVERY_S; i > 0; i--) vportHistory.push({ st: S.time - i * BALL_EVERY_S, cmd: S.vPortValve.commandPosition, act: S.vPortValve.actualPosition });
 }
 
 subscribe(() => {
@@ -62,6 +64,11 @@ subscribe(() => {
     lastProcSim = S.time;
     processHistory.push(processSample(S.time));
     while (processHistory.length && processHistory[0].st < S.time - PROC_WINDOW_S) processHistory.shift();
+  }
+  if (S.time - lastVportSim >= BALL_EVERY_S) {
+    lastVportSim = S.time;
+    vportHistory.push({ st: S.time, cmd: S.vPortValve.commandPosition, act: S.vPortValve.actualPosition });
+    while (vportHistory.length && vportHistory[0].st < S.time - BALL_WINDOW_S) vportHistory.shift();
   }
   if (S.time - lastEsdSim >= BALL_EVERY_S) {
     lastEsdSim = S.time;
@@ -82,8 +89,38 @@ function toWallClock(list, now) {
 }
 export function ballSamplesWallClock(now = Date.now()) { return toWallClock(ballHistory, now); }
 export function processSamplesWallClock(now = Date.now()) { return toWallClock(processHistory, now); }
+/** Stamp of the newest sample in each buffer — cheap "has new data arrived?" check for chart redraws. */
+export function sampleStamp() {
+  return `${positionHistory[positionHistory.length - 1]?.t || 0}|${ballHistory[ballHistory.length - 1]?.st || 0}|${esdHistory[esdHistory.length - 1]?.st || 0}|${processHistory[processHistory.length - 1]?.st || 0}|${vportHistory[vportHistory.length - 1]?.st || 0}`;
+}
 /** ESD samples { t, cmd, pos } (0.2 s) for the trip-response and cyclic-test charts. */
 export function esdSamplesWallClock(now = Date.now()) { return toWallClock(esdHistory, now); }
+/** V-Port samples in the { t, cmd, pos } shape used by the cycle chart. */
+export function vportSamplesWallClock(now = Date.now()) { return toWallClock(vportHistory, now).map((p) => ({ t: p.t, cmd: p.cmd, pos: p.act })); }
+
+/**
+ * Demo seeding: write a completed V-Port cyclic command test into the V-Port buffer — command
+ * steps lo → hi every `period` s for `total` cycles starting `agoS` s ago; the actual position
+ * follows with the per-cycle dead time `delayFor(k)`, limited to `ceilingFor(k)`, at `rate` %/s.
+ */
+export function seedVportCycleTest({ agoS, period, total, hi, lo, delayFor, ceilingFor, rate = 40 }) {
+  const simNow = S.time, t0 = simNow - agoS, tEnd = t0 + 2 * period * total;
+  const cmdAt = (t) => { const el = t - t0; if (el < 0 || el >= 2 * period * total) return hi; return (el % (2 * period)) < period ? lo : hi; };
+  const cycleAt = (t) => Math.min(total, Math.max(1, Math.floor((t - t0) / (2 * period)) + 1));
+  vportHistory.length = 0;
+  let act = hi;
+  for (let i = BALL_WINDOW_S / BALL_EVERY_S; i >= 0; i--) {
+    const st = simNow - i * BALL_EVERY_S;
+    const k = cycleAt(Math.min(st, tEnd - 0.001));
+    const delay = st >= t0 ? delayFor(k) : 0;
+    const ceiling = st >= t0 ? ceilingFor(k) : 100;
+    const target = Math.min(cmdAt(st - delay), ceiling);
+    act += Math.max(-rate * BALL_EVERY_S, Math.min(rate * BALL_EVERY_S, target - act));
+    vportHistory.push({ st, cmd: cmdAt(st), act });
+  }
+  lastVportSim = simNow;
+  return { startSt: t0, endSt: tEnd };
+}
 
 /**
  * Demo seeding: write a completed ESD cyclic ON/OFF test into the ESD buffer — command

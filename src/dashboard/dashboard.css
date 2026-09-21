@@ -40,6 +40,10 @@
 .subbar-sep { width: 1px; height: 16px; background: rgba(15,23,42,0.15); }
 .subbar .cnt { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-weight: 600; }
 .subbar .cnt b { color: var(--text); }
+.subbar .cnt-link { background: none; border: 0; padding: 2px 6px; margin: -2px -6px; border-radius: 6px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.subbar .cnt-link:hover { background: rgba(37,99,235,0.08); color: var(--accent); }
+.subbar .cnt-link:hover b { color: var(--accent); }
+.subbar .cnt-closed { font-weight: 500; } .subbar .cnt-closed i { font-style: normal; font-weight: 700; }
 .subbar .cnt[data-cnt="critical"]:not([data-zero="true"]) b { color: var(--alarm); }
 .subbar .cnt[data-cnt="attention"]:not([data-zero="true"]) b { color: var(--warn); }
 .subbar-right { color: var(--muted); font-size: 12px; }
@@ -59,7 +63,6 @@
 .tone-critical { color: var(--alarm) !important; } .tone-attention { color: var(--warn) !important; } .tone-normal { color: var(--ok) !important; } .tone-muted { color: var(--muted) !important; }
 .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .note { font-size: 10.5px; color: var(--muted); font-weight: 500; letter-spacing: 0; text-transform: none; }
-.disclaimer { margin: 2px 2px 0; font-size: 10.5px; color: var(--muted); }
 .empty { font-size: 12px; color: var(--muted); padding: 10px 0; }
 
 /* Dashboard / maintenance buttons size to their label (the Twin's panel .btn rule stretches and may clip). */
@@ -111,6 +114,7 @@
 .status-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .status-table th { text-align: left; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding: 5px 8px; border-bottom: 1px solid var(--card-border); }
 .status-table td { padding: 6px 8px; border-bottom: 1px solid rgba(15,23,42,0.05); vertical-align: middle; }
+.status-table td:first-child { padding-left: 12px; }
 .status-table tr[data-id] { cursor: pointer; }
 .status-table tr[data-id]:hover { background: #F1F5F9; }
 .status-table tr.lvl-attention { background: rgba(245,158,11,0.07); }
@@ -134,9 +138,9 @@
 /* ===== Detail panel ===== */
 .card-detail { padding: 0; overflow: hidden; }
 /* accordion */
-.status-table .chev { display: inline-block; width: 10px; margin-right: 6px; color: var(--muted); font-size: 10px; line-height: 1; transition: transform 0.15s; }
-.status-table .chev::before { content: '\25B6'; }
-.status-table tr.is-open .chev { transform: rotate(90deg); color: var(--accent); }
+.status-table .row-name { display: inline-flex; align-items: center; gap: 8px; }
+.status-table .chev { display: inline-block; width: 12px; height: 12px; flex: none; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 1l6 4-6 4z' fill='%2364748B'/%3E%3C/svg%3E") center / 10px 10px no-repeat; transform-origin: 50% 50%; transition: transform 0.15s; }
+.status-table tr.is-open .chev { transform: rotate(90deg); background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 1l6 4-6 4z' fill='%232563EB'/%3E%3C/svg%3E"); }
 .status-table tr.detail-row { cursor: default; }
 .status-table tr.detail-row > td { padding: 0 8px 12px; background: #F8FAFC; border-bottom: 1px solid var(--card-border); }
 .detail-row .card-detail { border: 1px solid var(--card-border); border-radius: var(--radius); background: #fff; box-shadow: 0 1px 2px rgba(15,23,42,0.04); }

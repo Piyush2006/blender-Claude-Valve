@@ -16,6 +16,7 @@ export const ANOMALY_CATALOG = {
       { id: 'slowResponse', label: 'Slow Response', type: 'VPORT_SLOW_RESPONSE', short: 'SLOW RESPONSE', severity: 'anomaly', explain: 'Valve reaches the commanded position too slowly.' },
       { id: 'hunting', label: 'Hunting / Oscillation', type: 'VPORT_HUNTING', short: 'HUNTING', severity: 'anomaly', explain: 'Valve oscillates around the commanded position.' },
       { id: 'trimWear', label: 'Trim Wear', type: 'VPORT_TRIM_WEAR', short: 'TRIM WEAR', severity: 'warning', explain: 'Flow is higher than expected for the position — internal trim degradation.' },   // predictive: attention, not critical
+      { id: 'cyclicDegradation', label: 'Position Mismatch (cyclic test)', type: 'VPORT_POSITION_MISMATCH', short: 'POSITION MISMATCH', severity: 'anomaly', explain: 'Repeated command steps: the response delay grows cycle by cycle until the valve no longer reaches the commanded position.' },
     ],
   },
   esdValve: {
@@ -26,7 +27,7 @@ export const ANOMALY_CATALOG = {
       { id: 'slowShutdown', label: 'Slow Shutdown', type: 'ESD_SLOW_SHUTDOWN', short: 'SLOW SHUTDOWN', severity: 'warning', explain: 'ESD closes slower than the acceptable shutdown time.' },
       { id: 'partialClosure', label: 'Partial Closure', type: 'ESD_PARTIAL_CLOSURE', short: 'PARTIAL CLOSURE', severity: 'anomaly', explain: 'ESD stops part-way on trip — steam continues downstream.' },
       { id: 'lowAirPressure', label: 'Low Instrument Air', type: 'ESD_LOW_AIR', short: 'LOW AIR PRESSURE', severity: 'anomaly', explain: 'Instrument air below minimum — actuator cannot complete its stroke.' },
-      { id: 'cyclicDegradation', label: 'Cyclic Response Degradation', type: 'ESD_RESPONSE_DEGRADATION', short: 'RESPONSE DEGRADING', severity: 'warning', explain: 'Repeated ON/OFF cycles: the response delay grows — normal → slight delay → degrading → slow response.' },   // predictive: attention
+      { id: 'cyclicDegradation', label: 'Slow Response (cyclic test)', type: 'ESD_RESPONSE_DEGRADATION', short: 'SLOW RESPONSE', severity: 'warning', explain: 'Valve response time is increasing over repeated ON/OFF cycles — good → small delay → increasing delay → degraded.' },   // predictive: attention
     ],
   },
   ballValve: {

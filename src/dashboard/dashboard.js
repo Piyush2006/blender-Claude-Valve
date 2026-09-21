@@ -3,11 +3,12 @@ import { snapshot, fmt, THRESHOLDS } from './dashboardData.js';
 import { LEVEL_LABEL, flowDeviationPercent } from '../simulation/units.js';
 import { ANOMALY_CATALOG } from '../simulation/anomalyCatalog.js';
 import { createSchematic } from './schematic.js';
-import { overviewMetrics, impactText, historicalFor, chartKind, targetFlow, seriesChartFor, esdCycleSummary } from './anomalyAnalytics.js';
-import { createPositionChart, createBallResponseChart, createFlowChart, createSeriesChart, createEsdCycleChart, CHART_COLORS } from './anomalyCharts.js';
-import { positionHistory, ballSamplesWallClock, esdSamplesWallClock, processSamplesWallClock } from './liveHistory.js';
+import { overviewMetrics, impactText, historicalFor, chartKind, targetFlow, seriesChartFor, esdCycleSummary, vportCycleSummary } from './anomalyAnalytics.js';
+import { esdCycleStage } from '../simulation/anomalyEngine.js';
+import { createPositionChart, createBallResponseChart, createFlowChart, createSeriesChart, createEsdCycleChart, createEsdDelayChart, CHART_COLORS } from './anomalyCharts.js';
+import { positionHistory, ballSamplesWallClock, esdSamplesWallClock, processSamplesWallClock, vportSamplesWallClock, sampleStamp } from './liveHistory.js';
 import { knowledgeFor } from '../maintenance/knowledge.js';
-import { ticketsFor, onTicketsChange, openTicketCount, tickets as allTickets, historicalComparison, trendSeries } from '../maintenance/ticketStore.js';
+import { ticketsFor, onTicketsChange, openTicketCount, closedTicketCount, tickets as allTickets, historicalComparison, trendSeries, vportDayStory } from '../maintenance/ticketStore.js';
 
 /**
  * Dashboard view — MONITOR → IDENTIFY ANOMALY → ANALYZE → TAKE ACTION.
@@ -26,7 +27,7 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
   const clockDate = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
   const clockTime = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
-  const view = { selectedId: null, userPicked: false, expanded: true, tab: 'overview', range: '60m', chart: null, chartFor: null, menuOpen: false };
+  const view = { selectedId: null, userPicked: false, expanded: true, tab: 'overview', range: '24h', chart: null, chartFor: null, menuOpen: false };
 
   container.innerHTML = `
     <div class="dash">
@@ -37,7 +38,7 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
           <span class="cnt" data-cnt="critical"><i class="lg is-critical"></i><b>0</b> Critical</span>
           <span class="cnt" data-cnt="attention"><i class="lg is-attention"></i><b>0</b> Attention</span>
           <span class="subbar-sep"></span>
-          <span class="cnt" data-cnt="tickets">Open Tickets: <b>0</b></span>
+          <button class="cnt cnt-link" data-cnt="tickets" data-act="reports" type="button" title="Open the ticket list">Open Tickets: <b>0</b><span class="cnt-closed" data-closed hidden> · <i>0</i> closed</span></button>
         </div>
         <div class="subbar-right mono"><span id="clock-date"></span> <span id="clock-time"></span></div>
       </div>
@@ -52,7 +53,7 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
 
       <section class="card card-health">
         <div class="card-head compact">
-          <div><h2>Component Health <span class="count-badge" id="dash-anom-count" data-zero="true">0</span></h2><p class="card-sub">All components and active anomalies in one view — select a row to view details</p></div>
+          <div><h2>Component Health <span class="count-badge" id="dash-anom-count" data-zero="true">0</span></h2></div>
           <span class="card-sub" id="dash-health-sub"></span>
         </div>
         <table class="status-table health-table">
@@ -61,7 +62,6 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
         </table>
       </section>
 
-      <p class="disclaimer">Live values are read from the Twin's simulation state (bar · kg/h · °C · rpm). Yesterday / 7-day baselines are a simulated historian for the demo; thresholds are demo values, not engineering limits.</p>
     </div>`;
 
   const q = (sel) => container.querySelector(sel);
@@ -112,7 +112,9 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
 
     // Status strip
     const critical = s.components.filter((c) => c.level === 'critical').length, attention = s.components.filter((c) => c.level === 'attention').length;
-    cnt.critical.textContent = critical; cnt.attention.textContent = attention; cnt.tickets.textContent = openTicketCount();
+    const setNum = (el, v) => { if (el.textContent !== String(v)) el.textContent = String(v); };
+    setNum(cnt.critical, critical); setNum(cnt.attention, attention); setNum(cnt.tickets, openTicketCount());
+    { const closed = closedTicketCount(); const el = q('[data-closed]'); el.hidden = closed === 0; setNum(el.querySelector('i'), closed); }
     q('[data-cnt=critical]').dataset.zero = String(critical === 0); q('[data-cnt=attention]').dataset.zero = String(attention === 0);
 
     // Process flow
@@ -146,20 +148,23 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
       const tone = r.level === 'critical' ? 'tone-critical' : r.level === 'attention' ? 'tone-attention' : 'tone-accent';
       const open = r.id === selectedId && view.expanded;
       return `<tr data-id="${r.id}" class="lvl-${r.level} ${r.id === selectedId ? 'is-selected' : ''} ${open ? 'is-open' : ''}" aria-expanded="${open}">
-        <td><i class="chev" aria-hidden="true"></i>${esc(r.name)}</td>
+        <td><span class="row-name"><i class="chev" aria-hidden="true"></i>${esc(r.name)}</span></td>
         <td><i class="lg is-${r.level}"></i>${LEVEL_LABEL[r.level]}</td>
         <td class="mono ${tone}">${esc(r.state || r.value)}</td>
         <td class="${an ? tone : 'tone-muted'}">${an ? `<b>${esc(an.title)}</b>${ticket ? ` <span class="row-ticket">${ticket.id}</span>` : ''}` : '—'}</td>
         <td class="mono tone-accent">${rowFmt.format(new Date(at))}</td>
         <td class="col-action">${an ? `<button class="btn btn-view" type="button" data-act="view" data-id="${r.id}">View</button>` : '<span class="tone-muted">—</span>'}</td>
       </tr>`; }).join(''));
-    anomCount.textContent = String(s.components.length);
+    if (anomCount.textContent !== String(s.components.length)) anomCount.textContent = String(s.components.length);
     mountDetailRow(selectedId);
-    setHtml('healthsub', healthSub, s.anomalies.length ? `<span class="tone-critical"><b>${s.anomalies.length}</b> active ${s.anomalies.length === 1 ? 'anomaly' : 'anomalies'}</span>` : `<span class="tone-normal">No active anomalies</span>`);
+    setHtml('healthsub', healthSub, s.anomalies.length ? `<span class="tone-critical"><b>${s.anomalies.length}</b> active ${s.anomalies.length === 1 ? 'anomaly' : 'anomalies'}</span>` : '');
 
     // Detail (inline accordion panel under the expanded row)
     if (view.expanded) renderDetail(s, entry, selectedId, now, rebuildDetail);   // structural rebuild only on selection / tab / range changes, never on the periodic refresh
-    if (view.chart && (force || now - lastChart > 500)) { lastChart = now; updateChart(entry, selectedId); }   // live trend: 2 Hz redraw
+    if (view.chart || view.chart2) {
+      const key = chartDataKey(selectedId);
+      if (key !== view.chartKey && now - lastChart > 900) { lastChart = now; view.chartKey = key; updateChart(entry, selectedId); }
+    }
   }
 
   function schematicText(r) {
@@ -197,18 +202,17 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
       </div>` : `
       <div class="dh-left">
         <div class="dh-title"><span class="dh-icon is-normal">✓</span><h2>${esc(compLabel)}</h2><span class="badge" data-level="normal">NORMAL</span></div>
-        <div class="dh-sub">No active anomaly — values within normal range.</div>
       </div>
       <div class="dh-meta"><div><span>Component</span><b>${esc(compLabel)}</b></div><div><span>Open Tickets</span><b class="mono">${ticketsFor(selectedId).length}</b></div></div>
       <div class="dh-actions">
         <button class="btn" type="button" data-act="twin" data-id="${selectedId}">View in Twin</button>
-        ${ticket ? `<button class="btn btn-primary" type="button" data-act="ticket" data-ticket="${ticket.id}">View Ticket ${ticket.id}</button>` : `<button class="btn btn-primary" type="button" disabled title="No active anomaly to raise a ticket for">Create Ticket</button>`}
+        ${ticket ? `<button class="btn btn-primary" type="button" data-act="ticket" data-ticket="${ticket.id}">View Ticket ${ticket.id}</button>` : `<button class="btn btn-primary" type="button" disabled>Create Ticket</button>`}
         <div class="menu-wrap"><button class="btn btn-more" type="button" data-act="menu" title="More">…</button><div class="menu" id="detail-menu" hidden>
           ${ticket ? `<button type="button" data-act="ticket" data-ticket="${ticket.id}">Open ticket ${ticket.id}</button>` : ''}
           <button type="button" data-act="reports">All maintenance tickets</button>
         </div></div>
       </div>`;
-    const headKey = `${selectedId}:${entry?.type || 'normal'}:${entry?.detectedAt || 0}:${ticket ? `${ticket.id}:${ticket.status}` : ''}:${ticketsFor(selectedId).length}`;
+    const headKey = `${selectedId}:${entry?.type || 'normal'}:${entry?.detectedAt || 0}:${entry?.subtitle || ''}:${ticket ? `${ticket.id}:${ticket.status}` : ''}:${ticketsFor(selectedId).length}`;
     if (cache.headKey !== headKey) { detailHead.innerHTML = head; cache.headKey = headKey; }
     patchDurations(detailHead, now);
     const tabs = [['overview', 'Overview'], ['analytics', 'Analytics'], ['causes', 'Possible Causes'], ['recommendations', 'Recommendations'], ['activity', 'Activity']];
@@ -224,9 +228,6 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
           ${impactBanner(entry, selectedId, level)}
         </div>
         <div class="ov-right">
-          <div class="chart-head"><h4>${chartTitle(selectedId, 'overview')}</h4>${rangeSelect(selectedId)}</div>
-          <div data-chart></div>
-          ${legendHtml(selectedId)}
           ${historicalHtml(entry, selectedId)}
         </div>
       </div>`;
@@ -234,13 +235,19 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
       else { patch('[data-metrics]', metricsHtml(entry, selectedId)); patch('[data-hist]', historicalHtml(entry, selectedId)); }
     } else if (view.tab === 'analytics') {
       const rows = historicalComparison(selectedId === 'rotaryJoint' || selectedId === 'yankee' ? 'steam' : selectedId);
+      const esdCycle = chartKind(selectedId) === 'esdCycle';
+      const vk = null;                                   // V-Port: the position trend tells the story (no cycle charts)
+      const cyc = esdCycle;
       const html = `<div class="an-full">
-        <div class="chart-head"><h4>${chartTitle(selectedId, 'analytics')}</h4>${rangeSelect(selectedId)}</div>
-        <div data-chart class="tall"></div>
-        ${legendHtml(selectedId)}
+        ${cyc ? `<div class="chart-head"><h4>${vk ? 'V-Port Response per Command Cycle — degradation over the test' : 'ESD Response Delay per Cycle — degradation over the test'}</h4><span class="note">${vk ? `${vk.active ? 'Test running' : 'Last test'} · ${vk.lo}% ↔ ${vk.hi}% every ${vk.period} s` : esc(rangeSelect(selectedId).replace(/<[^>]+>/g, ''))}</span></div>
+        <div data-chart2 class="tall"></div>
+        <div class="legend-row"><span><i style="background:#16A34A"></i>Good</span><span><i style="background:#F59E0B"></i>Small delay</span><span><i style="background:#EA580C"></i>Increasing delay</span><span><i style="background:#DC2626"></i>${vk ? 'Position not reached' : 'Degraded'}</span><span><i style="background:#1E293B"></i>Response delay (s)</span></div>
+        <div class="chart-head" style="margin-top:12px"><h4>${vk ? `V-Port Command vs Actual Position — ${vk.current} Cycles` : chartTitle(selectedId, 'analytics')}</h4></div>` : `<div class="chart-head"><h4>${chartTitle(selectedId, 'analytics')}</h4>${rangeSelect(selectedId)}</div>`}
+        <div data-chart class="${cyc ? '' : 'tall'}" ${vk ? 'data-vport-cycle' : ''}></div>
+        ${vk ? `<div class="legend-row"><span><i style="background:${CHART_COLORS.cmd}"></i>Commanded (%)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual (%)</span><span><i style="background:${CHART_COLORS.lag};border:1px solid rgba(245,158,11,0.5)"></i>Response lag</span><span><i style="background:rgba(220,38,38,0.12);border:1px solid rgba(220,38,38,0.4)"></i>Degrading cycles</span></div>` : legendHtml(selectedId)}
         <div class="an-two">
           ${historicalHtml(entry, selectedId)}
-          <div class="hist-table-wrap"><h4>Historical Comparison</h4><table class="mt-comp-table"><thead><tr><th>Parameter</th><th>Today</th><th>Yesterday</th><th>7-Day Avg</th></tr></thead><tbody data-comp>${rows.map((r) => `<tr><td>${esc(r.label)}</td><td class="today mono">${esc(r.today)}</td><td class="mono">${esc(r.yesterday)}</td><td class="mono">${esc(r.avg7)}</td></tr>`).join('')}</tbody></table><p class="note">Yesterday / 7-day values are a simulated historian baseline (same units as the Twin).</p></div>
+          <div class="hist-table-wrap"><h4>Historical Comparison</h4><table class="mt-comp-table"><thead><tr><th>Parameter</th><th>Today</th><th>Yesterday</th><th>7-Day Avg</th></tr></thead><tbody data-comp>${rows.map((r) => `<tr><td>${esc(r.label)}</td><td class="today mono">${esc(r.today)}</td><td class="mono">${esc(r.yesterday)}</td><td class="mono">${esc(r.avg7)}</td></tr>`).join('')}</tbody></table></div>
         </div>
       </div>`;
       if (structural) { detailBody.innerHTML = html; mountChart(selectedId, entry); }
@@ -248,8 +255,8 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
     } else if (view.tab === 'causes' || view.tab === 'recommendations') {
       const kb = entry ? knowledgeFor(entry.type) : null;
       const list = view.tab === 'causes' ? kb?.causes : kb?.recommendations;
-      const html = entry ? `<div class="kb"><h4>${view.tab === 'causes' ? 'Possible Causes' : 'Recommendations'} <span class="note">${view.tab === 'causes' ? '— possible, not confirmed root causes' : '— concise checklist, confirm on site'}</span></h4>${view.tab === 'causes' ? `<ul class="kb-list">${list.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>` : `<ol class="kb-list">${list.map((c) => `<li>${esc(c)}</li>`).join('')}</ol>`}</div>`
-        : `<div class="kb"><p class="note">No active anomaly for this component — nothing to diagnose.</p></div>`;
+      const html = entry ? `<div class="kb"><h4>${view.tab === 'causes' ? 'Possible Causes' : 'Recommendations'}</h4>${view.tab === 'causes' ? `<ul class="kb-list">${list.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>` : `<ol class="kb-list">${list.map((c) => `<li>${esc(c)}</li>`).join('')}</ol>`}</div>`
+        : `<div class="kb"></div>`;
       if (structural) { detailBody.innerHTML = html; view.chart = null; }
     } else {
       const items = [];
@@ -268,13 +275,19 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
       if (el.textContent !== txt) el.textContent = txt;
     }
   }
-  function patch(sel, html) { const el = detailBody.querySelector(sel); if (el && el.innerHTML !== html) el.innerHTML = html; }
+  const patched = new Map();   // selector → last HTML written (innerHTML re-serialises, so it cannot be compared directly)
+  function patch(sel, html) {
+    const el = detailBody.querySelector(sel);
+    if (!el) return;
+    if (patched.get(sel) === html && el.dataset.patched === '1') return;
+    el.innerHTML = html; el.dataset.patched = '1'; patched.set(sel, html);
+  }
 
   function impactBanner(entry, selectedId, level) {
     if (entry) return `<div class="impact is-${level}"><b>Impact:</b> ${esc(impactText(entry))}</div>`;
     const k = selectedId === 'esdValve' ? esdCycleSummary() : null;
     if (k && k.trend === 'Degrading') return `<div class="impact is-attention"><b>Status: Degrading</b> — valve response time is increasing over multiple cycles (last cyclic test: ${k.initial.toFixed(1)} s → ${k.currentDelay.toFixed(1)} s).</div>`;
-    return `<div class="impact is-normal"><b>Status:</b> Component operating normally. Live values shown above.</div>`;
+    return '';
   }
   function metricsHtml(entry, selectedId) {
     const rows = overviewMetrics(entry || { componentId: selectedId, lines: [] });
@@ -297,14 +310,14 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
   }
   function rangeSelect(id) {
     const kind = chartKind(id);
-    if (kind === 'ballResponse' || kind === 'esdResponse') return `<span class="note">last stroke · live samples</span>`;
-    if (kind === 'esdCycle') { const k = esdCycleSummary(); return `<span class="note">${k?.active ? 'cycle test running' : 'cyclic ON/OFF test'} · ${k?.period || 5} s command cycle</span>`; }
-    if (kind === 'series') return `<span class="note">last 10 min · ${esc(seriesChartFor(id)?.note || '')}</span>`;
+    if (kind === 'ballResponse' || kind === 'esdResponse') return `<span class="note">Last stroke</span>`;
+    if (kind === 'esdCycle') { const k = esdCycleSummary(); return `<span class="note">${k?.active ? 'Test running' : 'Last test'} · ${k?.period || 5} s cycle</span>`; }
+    if (kind === 'series') return `<span class="note">Last 10 min</span>`;
     return `<select data-range class="range">${RANGES.map(([v, l]) => `<option value="${v}" ${v === view.range ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
   }
   function legendHtml(id) {
     const kind = chartKind(id);
-    if (kind === 'position') return `<div class="legend-row"><span><i style="background:${CHART_COLORS.cmd}"></i>Commanded (%)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual (%)</span><span><i style="background:${CHART_COLORS.gap};border:1px solid rgba(220,38,38,0.4)"></i>Deviation</span></div>`;
+    if (kind === 'position') return `<div class="legend-row"><span><i style="background:${CHART_COLORS.cmd}"></i>Command Position</span><span><i style="background:${CHART_COLORS.act}"></i>Actual Position</span><span><i style="background:${CHART_COLORS.gap};border:1px solid rgba(220,38,38,0.4)"></i>Deviation</span></div>`;
     if (kind === 'ballResponse') return `<div class="legend-row"><span><i style="background:${CHART_COLORS.cmd}"></i>Command (OPEN / CLOSE)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual state</span><span><i style="background:${CHART_COLORS.lag};border:1px solid rgba(245,158,11,0.5)"></i>Response lag</span></div>`;
     if (kind === 'esdCycle') return `<div class="legend-row"><span><i style="background:${CHART_COLORS.cmd}"></i>Command</span><span><i style="background:${CHART_COLORS.act}"></i>Actual</span><span><i style="background:${CHART_COLORS.lag};border:1px solid rgba(245,158,11,0.5)"></i>Response lag</span><span><i style="background:rgba(220,38,38,0.12);border:1px solid rgba(220,38,38,0.4)"></i>Degrading cycles</span></div>`;
     if (kind === 'esdResponse') return `<div class="legend-row"><span><i style="background:${CHART_COLORS.cmd}"></i>Trip command (OPEN / CLOSE)</span><span><i style="background:${CHART_COLORS.act}"></i>Actual state</span><span><i style="background:${CHART_COLORS.lag};border:1px solid rgba(245,158,11,0.5)"></i>Shutdown lag</span></div>`;
@@ -312,8 +325,11 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
     return `<div class="legend-row"><span><i style="background:${CHART_COLORS.flow}"></i>Steam flow (kg/h)</span><span><i style="background:${CHART_COLORS.expected}"></i>Expected</span></div>`;
   }
   function mountChart(id, entry) {
+    const host2 = detailBody.querySelector('[data-chart2]');
+    view.chart2 = host2 ? createEsdDelayChart(host2, { height: 230 }) : null;
     const host = detailBody.querySelector('[data-chart]');
     if (!host) { view.chart = null; return; }
+    if (host.hasAttribute('data-vport-cycle')) { view.chart = createEsdCycleChart(host, { height: 200, percent: true }); view.chartFor = 'vportCycle'; view.chartKey = chartDataKey(id); updateChart(entry, id); return; }
     const kind = chartKind(id);
     const height = host.classList.contains('tall') ? 240 : 150;
     view.chart = kind === 'position' ? createPositionChart(host, { height })
@@ -322,10 +338,16 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
       : kind === 'series' ? createSeriesChart(host, { height })
       : createFlowChart(host, { height });
     view.chartFor = kind;
+    view.chartKey = chartDataKey(id);
     updateChart(entry, id);
   }
   function updateChart(entry, id) {
+    if (view.chart2 && detailBody.querySelector('[data-chart2] svg')) {
+      if (id === 'vPortValve') { const k = vportCycleSummary(); view.chart2.update(k ? { period: k.period, total: k.total, cycles: k.cycles } : null, { acceptable: k?.acceptable ?? 2, stageOf: k?.stageOf }); }
+      else { const ct = simulationState.esdValve.cycleTest; view.chart2.update(ct ? { period: ct.period, total: ct.total, cycles: ct.cycles } : null, { acceptable: simulationState.esdValve.sim.acceptableDelay, stageOf: (cy) => esdCycleStage(cy.delay, simulationState.esdValve.sim) }); }
+    }
     if (!view.chart || !detailBody.querySelector('[data-chart] svg')) return;
+    if (view.chartFor === 'vportCycle') { const ct = simulationState.vPortValve.cycleTest; if (ct) { const now = Date.now(), wall = (st) => now - (simulationState.time - st) * 1000; view.chart.update(vportSamplesWallClock(), { startAt: wall(ct.startSt), endAt: wall(ct.active ? simulationState.time : ct.endSt), period: ct.period, total: ct.total, cycles: ct.cycles }, { acceptable: simulationState.vPortValve.sim.cyclic.acceptableDelay }); } return; }
     const kind = chartKind(id);
     if (kind === 'ballResponse') view.chart.update(ballSamplesWallClock(), { windowMs: 40 * 1000, acceptable: simulationState.ballValve.sim.acceptableTime });
     else if (kind === 'esdResponse') view.chart.update(esdSamplesWallClock(), { windowMs: 40 * 1000, acceptable: simulationState.esdValve.sim.acceptableTime });
@@ -334,8 +356,18 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
     else {
       const live = view.range === '10m' || view.range === '60m';
       const pts = live ? positionHistory : trendSeries(view.range, entry?.detectedAt);
-      view.chart.update(pts, { rangeMs: RANGE_MS[view.range], onsetAt: entry?.detectedAt || null });
+      const episodes = !live && id === 'vPortValve' && entry?.type === 'VPORT_POSITION_MISMATCH' ? vportDayStory(entry.detectedAt).episodes : null;
+      view.chart.update(pts, { rangeMs: RANGE_MS[view.range], onsetAt: entry?.detectedAt || null, episodes });
     }
+  }
+
+  /** What the selected component's chart depends on — the chart is redrawn only when this changes. */
+  function chartDataKey(id) {
+    const kind = chartKind(id), S = simulationState;
+    if (kind === 'esdCycle') { const ct = S.esdValve.cycleTest; return `esd:${ct ? `${ct.current}:${ct.active}` : 'none'}:${ct?.active ? sampleStamp() : ''}`; }
+    if (kind === 'ballResponse') { const b = S.ballValve.sim; return `ball:${b.moving ? sampleStamp() : `${b.lastCloseDuration}:${b.lastOpenDuration}`}`; }
+    if (kind === 'esdResponse') { const e = S.esdValve.sim; return `esdr:${e.tripping || S.esdValve.command !== 100 ? sampleStamp() : `${e.lastTripDuration}`}`; }
+    return `${kind}:${view.range}:${sampleStamp()}`;
   }
 
   /** Keep the accordion row directly under the expanded component row (or out of the table when collapsed). */
