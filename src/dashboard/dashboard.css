@@ -134,8 +134,9 @@
 /* ===== Detail panel ===== */
 .card-detail { padding: 0; overflow: hidden; }
 /* accordion */
-.status-table .chev { display: inline-block; width: 0; height: 0; border-left: 5px solid var(--muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; margin-right: 8px; transition: transform 0.15s; vertical-align: 1px; }
-.status-table tr.is-open .chev { transform: rotate(90deg); border-left-color: var(--accent); }
+.status-table .chev { display: inline-block; width: 10px; margin-right: 6px; color: var(--muted); font-size: 10px; line-height: 1; transition: transform 0.15s; }
+.status-table .chev::before { content: '\25B6'; }
+.status-table tr.is-open .chev { transform: rotate(90deg); color: var(--accent); }
 .status-table tr.detail-row { cursor: default; }
 .status-table tr.detail-row > td { padding: 0 8px 12px; background: #F8FAFC; border-bottom: 1px solid var(--card-border); }
 .detail-row .card-detail { border: 1px solid var(--card-border); border-radius: var(--radius); background: #fff; box-shadow: 0 1px 2px rgba(15,23,42,0.04); }
