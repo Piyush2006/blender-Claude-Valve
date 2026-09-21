@@ -14,7 +14,7 @@ import { ticketsFor, onTicketsChange, openTicketCount, tickets as allTickets, hi
  *
  * Reads the same simulationState as the Twin (through dashboardData.snapshot) and
  * never edits it; units come from the shared unit configuration. Layout:
- * status strip → process flow → component status + active anomalies →
+ * status strip → process flow → component health (status + anomalies in one table) →
  * selected anomaly detail. Ticketing opens as a modal /
  * drawer on top of this view (maintenanceUI).
  */
@@ -50,19 +50,16 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
         <div id="dash-schematic"></div>
       </section>
 
-      <div class="dash-mid">
-        <section class="card card-status">
-          <div class="card-head compact"><div><h2>Component Status</h2><p class="card-sub">Select a component to view details</p></div></div>
-          <table class="status-table">
-            <thead><tr><th>Component</th><th>Status</th><th>Key Parameter / State</th></tr></thead>
-            <tbody id="dash-status-body"></tbody>
-          </table>
-        </section>
-        <section class="card card-anomalies">
-          <div class="card-head compact"><h2>Active Anomalies <span class="count-badge" id="dash-anom-count">0</span></h2></div>
-          <div id="dash-anomalies"></div>
-        </section>
-      </div>
+      <section class="card card-health">
+        <div class="card-head compact">
+          <div><h2>Component Health <span class="count-badge" id="dash-anom-count" data-zero="true">0</span></h2><p class="card-sub">All components and active anomalies in one view — select a row to view details</p></div>
+          <span class="card-sub" id="dash-health-sub"></span>
+        </div>
+        <table class="status-table health-table">
+          <thead><tr><th>Component</th><th>Status</th><th>Condition / Key Parameter</th><th>Anomaly</th><th>Last Updated</th><th class="col-action">Action</th></tr></thead>
+          <tbody id="dash-status-body"></tbody>
+        </table>
+      </section>
 
       <div class="dash-bottom">
         <section class="card card-detail" id="dash-detail">
@@ -76,7 +73,9 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
 
   const q = (sel) => container.querySelector(sel);
   const schematic = createSchematic(q('#dash-schematic'), { onSelect: (id) => select(id) });
-  const statusBody = q('#dash-status-body'), anomHost = q('#dash-anomalies'), anomCount = q('#dash-anom-count');
+  const statusBody = q('#dash-status-body'), anomCount = q('#dash-anom-count'), healthSub = q('#dash-health-sub');
+  const rowFmt = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const lastUpdated = new Map();   // componentId → { key, at } : when the row's state last changed
   const detailHead = q('#detail-head'), detailTabs = q('#detail-tabs'), detailBody = q('#detail-body');
   const cnt = { critical: q('[data-cnt=critical] b'), attention: q('[data-cnt=attention] b'), tickets: q('[data-cnt=tickets] b') };
 
@@ -134,13 +133,28 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
       },
     });
 
-    // Component status table (no graphics — the process flow already shows the equipment)
-    setHtml('status', statusBody, s.components.map((r) => `<tr data-id="${r.id}" class="lvl-${r.level} ${r.id === selectedId ? 'is-selected' : ''}"><td>${r.name}</td><td><i class="lg is-${r.level}"></i>${LEVEL_LABEL[r.level]}</td><td class="mono ${r.level === 'critical' ? 'tone-critical' : r.level === 'attention' ? 'tone-attention' : ''}">${esc(r.state || r.value)}</td></tr>`).join(''));
-
-    // Active anomalies
-    setHtml('anoms', anomHost, s.anomalies.length ? s.anomalies.map((x) => anomalyCard(x, now, selectedId)).join('') : `<div class="empty"><i class="lg is-normal"></i>No active anomalies — all monitored components within normal range.</div>`);
-    patchDurations(anomHost, now);
-    anomCount.textContent = String(s.anomalies.length); anomCount.dataset.zero = String(s.anomalies.length === 0); anomCount.dataset.level = s.kpis.anomalies.level;
+    // Component health table (no graphics — the process flow already shows the equipment):
+    // status, condition, the component's own anomaly, when the row last changed, View action.
+    const byId = new Map(s.anomalies.map((x) => [x.componentId, x]));
+    setHtml('status', statusBody, s.components.map((r) => {
+      const an = byId.get(r.id) || null;
+      const key = `${r.level}|${r.state || r.value}|${an?.type || ''}`;
+      const prev = lastUpdated.get(r.id);
+      // A row's "last updated" is when its state last changed; an anomaly row dates from its detection.
+      if (!prev || prev.key !== key) lastUpdated.set(r.id, { key, at: an?.detectedAt || now });
+      const at = lastUpdated.get(r.id).at;
+      const ticket = an ? ticketsFor(r.id, an.type)[0] : null;
+      const tone = r.level === 'critical' ? 'tone-critical' : r.level === 'attention' ? 'tone-attention' : 'tone-accent';
+      return `<tr data-id="${r.id}" class="lvl-${r.level} ${r.id === selectedId ? 'is-selected' : ''}">
+        <td>${esc(r.name)}</td>
+        <td><i class="lg is-${r.level}"></i>${LEVEL_LABEL[r.level]}</td>
+        <td class="mono ${tone}">${esc(r.state || r.value)}</td>
+        <td class="${an ? tone : 'tone-muted'}">${an ? `<b>${esc(an.title)}</b>${ticket ? ` <span class="row-ticket">${ticket.id}</span>` : ''}` : '—'}</td>
+        <td class="mono tone-accent">${rowFmt.format(new Date(at))}</td>
+        <td class="col-action">${an ? `<button class="btn btn-view" type="button" data-act="view" data-id="${r.id}">View</button>` : '<span class="tone-muted">—</span>'}</td>
+      </tr>`; }).join(''));
+    anomCount.textContent = String(s.components.length);
+    setHtml('healthsub', healthSub, s.anomalies.length ? `<span class="tone-critical"><b>${s.anomalies.length}</b> active ${s.anomalies.length === 1 ? 'anomaly' : 'anomalies'}</span>` : `<span class="tone-normal">No active anomalies</span>`);
 
     // Detail + activity
     renderDetail(s, entry, selectedId, now, rebuildDetail);   // structural rebuild only on selection / tab / range changes, never on the periodic refresh
@@ -156,34 +170,6 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
   }
 
   /* ------------------------------ anomaly cards ------------------------------ */
-  function anomalyCard(x, now, selectedId) {
-    const cols = cardColumns(x).map(([k, v, tone]) => `<div class="ac-col"><span>${esc(k)}</span><b class="mono ${tone || ''}">${esc(v)}</b></div>`).join('');
-    const ticket = ticketsFor(x.componentId, x.type)[0];
-    return `<div class="anomaly is-${x.level} ${x.componentId === selectedId ? 'is-selected' : ''}" data-id="${x.componentId}">
-      <div class="ac-main">
-        <div class="ac-title"><i class="lg is-${x.level}"></i><div><b>${esc(x.component)}</b><div class="ac-sub">${esc(x.title)}</div></div></div>
-        <div class="ac-cols">${cols}
-          <div class="ac-col"><span>Duration</span><b class="mono" data-dur="${x.detectedAt || ''}"></b></div>
-          <div class="ac-col"><span>Severity</span><b class="tone-${x.level}">${x.level === 'critical' ? 'Critical' : 'Warning'}</b></div>
-        </div>
-      </div>
-      <div class="ac-actions">${ticket ? `<span class="ac-ticket">${ticket.id}</span>` : ''}<button class="btn btn-view" type="button" data-act="view" data-id="${x.componentId}">VIEW</button></div>
-    </div>`;
-  }
-  function cardColumns(x) {
-    const v = simulationState.vPortValve, b = simulationState.ballValve;
-    switch (x.type) {
-      case 'VPORT_POSITION_MISMATCH': case 'VPORT_STICKING': case 'VPORT_SLOW_RESPONSE': case 'VPORT_HUNTING': {
-        const dev = flowDeviationPercent(simulationState.steam.flow, targetFlow());
-        return [['Command → Actual', `${fmt.position(v.commandPosition)} → ${fmt.position(v.actualPosition)}`, 'tone-critical'], ['Position Error', fmt.percent(v.positionError), 'tone-critical'], ['Steam Flow', `${dev < 0 ? '▼' : '▲'} ${Math.abs(Math.round(dev))}%`, Math.abs(dev) > THRESHOLDS.flowDeviationWarning ? 'tone-critical' : '']];
-      }
-      case 'BALL_SLOW_OPERATION':
-        return [['Command', x.lines[0][1]], ['Actual', x.lines[1][1], b.sim.moving ? 'tone-attention' : ''], ['Response Time', x.lines[2][1], 'tone-attention'], ['Expected', x.lines[3][1]]];
-      default:
-        return x.lines.slice(0, 3);
-    }
-  }
-
   /* ------------------------------ detail panel ------------------------------ */
   function renderDetail(s, entry, selectedId, now, rebuild) {
     const compLabel = ANOMALY_CATALOG[selectedId]?.label || s.components.find((c) => c.id === selectedId)?.name || selectedId;
@@ -361,7 +347,7 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
 
   /* ------------------------------ events ------------------------------ */
   container.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-act], [data-tab], tr[data-id], .anomaly[data-id]');
+    const btn = e.target.closest('[data-act], [data-tab], tr[data-id]');
     if (!btn) { closeMenu(); return; }
     if (btn.dataset.act) {
       const act = btn.dataset.act;
@@ -377,7 +363,6 @@ export function createDashboard(container, { onOpenComponent, onCreateTicket, on
     }
     if (btn.matches('[data-tab]') && btn.closest('#detail-tabs')) { view.tab = btn.dataset.tab; update(true, true); return; }
     if (btn.matches('tr[data-id]')) select(btn.dataset.id);
-    else if (btn.matches('.anomaly[data-id]') && !e.target.closest('button')) select(btn.dataset.id);
   });
   container.addEventListener('change', (e) => { if (e.target.matches('[data-range]')) { view.range = e.target.value; update(true, true); } });
   function closeMenu() { const m = q('#detail-menu'); if (m) m.hidden = true; }

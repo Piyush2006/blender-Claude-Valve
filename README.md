@@ -142,12 +142,11 @@ rpm) via `units.js`. There are no generic KPI cards.
   per component, the selected component framed in blue (red tint when critical), and the
   relevant live values (steam flow with deviation vs command, paper moisture vs target,
   condensate return temperature). Clicking a symbol selects the component.
-* Component Status: a plain table (no graphics) — Component / Status / Key Parameter-State.
-  Isolation valves use discrete states (Open, Closing, Closed, Closing Slowly, Fail to Close…),
-  the V-Port shows `70% cmd / 32% act`, the safety valve Closed/Open, the check valve Forward/Reverse.
-* Active Anomalies: one compact card per flagged component (several can be active at once —
-  see *Concurrent anomalies* below) with anomaly-specific columns and a **VIEW** button that
-  selects it in the detail panel below (the dashboard never navigates away).
+* Component Health: one table for all 8 components — Status, Condition / Key Parameter,
+  the component's own Anomaly (several can be active at once), Last Updated (when the row's
+  state last changed; anomaly rows date from detection) and a **View** action that selects
+  the anomaly in the detail panel below. Isolation valves use discrete states (Open, Closing,
+  Closed, Closing Slowly, Fail to Close…), the V-Port shows `70% cmd / 32% act`.
 * Selected anomaly detail: header (component — anomaly, CRITICAL / WARNING, subtitle, first
   detected, duration, **View in Twin**, **Create Ticket**, ⋯ menu) and tabs Overview /
   Analytics / Possible Causes / Recommendations / Activity.
