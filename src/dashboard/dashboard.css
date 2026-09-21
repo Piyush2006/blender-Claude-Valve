@@ -5,8 +5,7 @@
   background: #0F1B2D; color: #E5EAF1; border-bottom: 1px solid rgba(255,255,255,0.06); z-index: 30;
 }
 #topbar .brand { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 13px; }
-#topbar .brand-mark { width: 26px; height: 26px; border-radius: 6px; background: #2563EB; display: inline-flex; align-items: center; justify-content: center; flex: none; }
-#topbar .brand-mark svg { width: 16px; height: 16px; fill: #fff; }
+#topbar .brand-mark { width: 28px; height: 28px; flex: none; display: block; object-fit: contain; }
 #topbar .brand-mill { font-weight: 700; white-space: nowrap; }
 #topbar .brand-div { width: 1px; height: 18px; background: rgba(255,255,255,0.18); }
 #topbar .brand-app { color: #B8C4D6; white-space: nowrap; }
