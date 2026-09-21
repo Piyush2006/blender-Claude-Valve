@@ -7,8 +7,6 @@
 #topbar .brand { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 13px; }
 #topbar .brand-mark { width: 28px; height: 28px; flex: none; display: block; object-fit: contain; }
 #topbar .brand-mill { font-weight: 700; white-space: nowrap; }
-#topbar .brand-div { width: 1px; height: 18px; background: rgba(255,255,255,0.18); }
-#topbar .brand-app { color: #B8C4D6; white-space: nowrap; }
 #topbar .tabs { display: flex; gap: 4px; margin: 0 auto; }
 #topbar .tab {
   background: none; border: 0; color: #B8C4D6; font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 14px; cursor: pointer;
@@ -217,6 +215,6 @@
   .ov-grid, .an-two { grid-template-columns: 1fr; }
 }
 @media (max-width: 720px) {
-  #topbar .brand-app,   .metric-row { grid-template-columns: 1fr 1fr; }
+  .metric-row { grid-template-columns: 1fr 1fr; }
   .kb-list { columns: 1; }
 }
