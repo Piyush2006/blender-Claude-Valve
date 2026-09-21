@@ -179,7 +179,8 @@ rpm) via `units.js`. There are no generic KPI cards.
 `sim.anomaly`) with its own persistence timer and publishes `simulationState.anomalies[]`
 (component, type, status, detail, detectedAt). `simulationState.anomaly` stays the *primary*
 anomaly (the one driven by the Anomaly Simulation panel, else the worst active one), so the Twin
-panels behave exactly as before; the Anomaly Simulation tab still runs one scenario at a time.
+panels behave exactly as before; the Anomaly Simulation tab edits one component at a time while the
+others keep their anomalies.
 
 `demoScenario.js` loads the demo at start-up: V-Port position mismatch (70 % commanded /
 32 % actual, detected 37 min ago, CRITICAL; the position trend shows the drop at the onset)
@@ -193,8 +194,12 @@ panel takes over from the sequencer.
 
 The Controls panel section is now **Anomaly Simulation**: `Valve / Component` → `Anomaly`
 (populated from `anomalyCatalog.js`) → only the relevant controls → physical effect in the 3D
-Twin. `simulationState.anomalySim {component, anomaly}` is the single selector; one anomaly is
-active at a time and `setAnomalyScenario()` returns everything else to normal. The V-Port
+Twin. `simulationState.anomalySim {component, anomaly}` is the selector of the component being
+edited: changing the component (`selectAnomalyComponent`) resets nothing and shows that
+component's current scenario; choosing an anomaly (`setAnomalyScenario`) resets and re-arms
+**only that component**, so the boot-demo anomalies (or earlier selections) on other components
+stay active and several anomalies can run concurrently. RESET SIMULATION returns the selected
+component alone to Normal. The V-Port
 scenarios are the original implementation, reached through the same selector. Detectors share
 the 2 s persistence timer; catalog severity decides ANOMALY (red) vs WARNING (amber).
 

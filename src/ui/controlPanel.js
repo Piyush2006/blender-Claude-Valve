@@ -1,7 +1,7 @@
 import {
   simulationState as S, subscribe,
   setBallValveCommand, setEsdValveCommand, setVPortCommand, setVPortActual,
-  setVPortStuck, setVPortSimParam, setAnomalyScenario, resetAnomalySimulation, setComponentSimParam,
+  setVPortStuck, setVPortSimParam, setAnomalyScenario, selectAnomalyComponent, resetAnomalySimulation, setComponentSimParam,
   setSafetyValveSetPressure, setYankeeRunning, setXrayValves,
 } from '../simulation/simulationState.js';
 import { ANOMALY_CATALOG, COMPONENT_ORDER, anomalyDef } from '../simulation/anomalyCatalog.js';
@@ -322,7 +322,7 @@ export function createControlPanel(container, { cameraRig, onValveXray }) {
   }
   compSel.value = S.anomalySim.component;
   fillAnomalies(S.anomalySim.component, S.anomalySim.anomaly);
-  compSel.addEventListener('change', () => setAnomalyScenario(compSel.value, 'normal'));
+  compSel.addEventListener('change', () => selectAnomalyComponent(compSel.value));   // switch the editor only; nothing is reset
   anomSel.addEventListener('change', () => setAnomalyScenario(compSel.value, anomSel.value));
   $('vport-reset').onclick = () => resetAnomalySimulation();
 

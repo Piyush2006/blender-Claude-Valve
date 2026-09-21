@@ -191,56 +191,72 @@ export function setVPortMode(mode) {
 
 /* ---- Generic anomaly simulation (all components) ------------------------------------ */
 
-/** Restore every component's simulation parameters and commands to normal operation. */
-function resetAllComponentSims() {
+/** Restore ONE component's simulation parameters and commands to normal operation. */
+function resetComponentSim(component) {
   const st = simulationState;
-  st.ballValve.sim = DEFAULT_SIMS.ballValve();
-  st.ballValve.command = 100;
-  st.esdValve.sim = DEFAULT_SIMS.esdValve();
-  st.esdValve.command = 100;
-  st.esdValve.tripped = false;
-  st.safetyValve.sim = DEFAULT_SIMS.safetyValve();
-  st.safetyValve.lift = 0;
-  st.safetyValve.reliefFlow = 0;
-  st.steamTrap.sim = DEFAULT_SIMS.steamTrap();
-  st.checkValve.sim = DEFAULT_SIMS.checkValve();
-  st.condensate.direction = 1;
+  switch (component) {
+    case 'ballValve': st.ballValve.sim = DEFAULT_SIMS.ballValve(); st.ballValve.command = 100; break;
+    case 'esdValve': st.esdValve.sim = DEFAULT_SIMS.esdValve(); st.esdValve.command = 100; st.esdValve.tripped = false; st.esdValve.cycleTest = null; break;
+    case 'safetyValve': st.safetyValve.sim = DEFAULT_SIMS.safetyValve(); st.safetyValve.lift = 0; st.safetyValve.reliefFlow = 0; break;
+    case 'steamTrap': st.steamTrap.sim = DEFAULT_SIMS.steamTrap(); break;
+    case 'checkValve': st.checkValve.sim = DEFAULT_SIMS.checkValve(); st.condensate.direction = 1; break;
+    default: break;
+  }
+}
+
+/** The anomaly currently simulated on a component ('normal' when none). */
+export function componentAnomalyOf(component) {
+  const st = simulationState;
+  if (component === 'vPortValve') return st.vPortValve.mode || 'normal';
+  return st[component]?.sim?.anomaly || 'normal';
 }
 
 /**
- * Select the component + anomaly driven by the Anomaly Simulation panel.
- * Only one anomaly is active at a time; everything else returns to normal.
+ * Select which component the Anomaly Simulation panel is editing, without touching any
+ * simulation: the panel shows that component's current scenario (e.g. the boot demo's
+ * ESD Slow Response) and every other component keeps its own anomaly.
+ */
+export function selectAnomalyComponent(component) {
+  const st = simulationState;
+  if (!st[component]) return;
+  st.anomalySim.component = component;
+  st.anomalySim.anomaly = componentAnomalyOf(component);
+  notify();
+}
+
+/**
+ * Select the anomaly driven by the Anomaly Simulation panel for ONE component.
+ * Only that component is reset and re-armed; the other components keep whatever anomaly
+ * they already have (boot demo or earlier selections), so several can be active at once.
  */
 export function setAnomalyScenario(component, anomaly = 'normal') {
   const st = simulationState;
-  const operatorCommand = st.vPortValve.commandPosition;   // operating set point from the Controls tab is kept
-  resetAllComponentSims();
+  if (!st[component]) return;
   if (st.demo) st.demo.phase = 'done';                     // the Anomaly Simulation panel takes over from the boot demo
   st.anomalySim.component = component;
   st.anomalySim.anomaly = anomaly;
   if (component === 'vPortValve') {
+    const operatorCommand = st.vPortValve.commandPosition;   // operating set point from the Controls tab is kept
     resetVPortSimulation(anomaly);            // reuses the existing V-Port scenario logic
+    st.vPortValve.commandPosition = operatorCommand;
+    st.vPortValve.actualPosition = operatorCommand;
+    st.vPortValve.physicalPosition = operatorCommand;
   } else {
-    resetVPortSimulation('normal');
+    resetComponentSim(component);
     if (st[component]?.sim) st[component].sim.anomaly = anomaly;
     // Scenario presets (relative to the operator's set pressure) so the effect is visible immediately.
     const set = st.safetyValve.setPressure;
     if (component === 'safetyValve' && anomaly === 'failureToOpen') st.safetyValve.sim.linePressure = set + 0.4;   // already above set, keeps rising
     if (component === 'safetyValve' && anomaly === 'pressureRelief') st.safetyValve.sim.linePressure = set - 0.6;  // overpressure event starts here
     if (component === 'esdValve' && anomaly === 'lowAirPressure') st.esdValve.sim.airPressure = 3.0;
-    if (component === 'esdValve' && anomaly === 'cyclicDegradation') st.esdValve.cycleTest = null;   // fresh cyclic test starts on the next tick
   }
-  st.vPortValve.commandPosition = operatorCommand;
-  st.vPortValve.actualPosition = operatorCommand;
-  st.vPortValve.physicalPosition = operatorCommand;
-  Object.assign(st.anomaly, { active: false, status: 'NORMAL', type: null, persistenceTime: 0, detail: '', component: null, severity: 'anomaly' });
   notify();
 }
 
 /**
  * Set ONE component's simulated anomaly without touching the others (used by the
  * boot demo scenario, which needs two anomalies at once). The Anomaly Simulation
- * panel keeps using setAnomalyScenario (one scenario at a time).
+ * panel uses setAnomalyScenario, which also resets the component before arming it).
  */
 export function setComponentAnomaly(component, anomaly = 'normal') {
   const st = simulationState;
@@ -290,7 +306,6 @@ export function resetVPortSimulation(mode = 'normal') {
   Object.assign(v.sim.trimWear, { health: 100, multiplier: 1 });
   Object.assign(v.sim.cyclic, { period: 30, count: 45, hi: 70, lo: 30, acceptableDelay: 1.0, delayInitial: 0.5, delayFinal: 5.0, finalActual: 32 });
   v.cycleTest = null;                       // a fresh cyclic test starts on the next tick when that mode is selected
-  Object.assign(simulationState.anomaly, { active: false, status: 'NORMAL', type: null, persistenceTime: 0, detail: '' });
   notify();
 }
 

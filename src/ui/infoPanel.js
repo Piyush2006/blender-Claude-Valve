@@ -68,7 +68,7 @@ export function createInfoPanel(container, { onFocus }) {
     if (detectEl) {
       const html = detectionReasonHtml(s, id);
       if (html !== detectHtml) { detectEl.innerHTML = html; detectHtml = html; }
-      const lvl = s.anomalySim.component === id ? s.anomaly.status.toLowerCase() : 'normal';
+      const lvl = st.status.toLowerCase();
       detectEl.className = `detect is-${lvl}`;
     }
     rows.forEach(([, v], i) => {
